@@ -4,3 +4,5 @@ python-multipart
 pydantic
 minio
 openai
+python-jose[cryptography]
+passlib[bcrypt]

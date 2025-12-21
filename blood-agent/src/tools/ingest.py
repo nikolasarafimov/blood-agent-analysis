@@ -12,7 +12,7 @@ from src.tools.extract_text import ExtractTextInput, extract_text_with_llm
 from storage.minio_storage import MinioConfig, ensure_bucket, put_original, put_text
 
 
-def ingest_then_extract(mc: Minio, cfg: MinioConfig, filepath: str, language: Optional[str], model_config=None) -> str:
+def ingest_then_extract(mc: Minio, cfg: MinioConfig, filepath: str, language: Optional[str], model_config=None, uploaded_by: str | None = None) -> str:
     """
     Core pipeline logic to save, extract, and update records.
     Returns the doc_id to be used by the caller.
@@ -49,6 +49,7 @@ def ingest_then_extract(mc: Minio, cfg: MinioConfig, filepath: str, language: Op
         etag_original=etag,
         model_provider=model_config.provider,
         model_name=model_config.model_name,
+        uploaded_by=uploaded_by,
     )
 
     try:

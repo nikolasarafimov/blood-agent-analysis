@@ -50,6 +50,7 @@ def init_db() -> None:
         _ensure_column(c, "record", "content_hash", "TEXT")  # for dedup
         _ensure_column(c, "record", "model_provider", "TEXT")  # LLM provider used (openai, anthropic, ollama)
         _ensure_column(c, "record", "model_name", "TEXT")  # LLM model name used (e.g., gpt-4o, claude-3-5-sonnet)
+        _ensure_column(c, "record", "uploaded_by", "TEXT")  # username who uploaded the document
         # optional for dedup
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_record_content_hash ON record(content_hash)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_record_anontxt ON record(anonymized_txt)")
@@ -66,8 +67,9 @@ def insert_record(
     content_type: Optional[str],
     size_bytes: Optional[int],
     etag_original: Optional[str],
-        model_provider: Optional[str] = None,
-        model_name: Optional[str] = None,
+    model_provider: Optional[str] = None,
+    model_name: Optional[str] = None,
+    uploaded_by: Optional[str] = None,
 ) -> None:
     now = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
     with _conn() as c:
@@ -75,10 +77,10 @@ def insert_record(
             INSERT INTO record (
                 id, bucket, original_key, text_key, filename, language,
                 content_type, size_bytes, etag_original, etag_text,
-                status, error, created_at, updated_at, model_provider, model_name)
-            VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, 'uploaded', NULL, ?, ?, ?, ?)
+                status, error, created_at, updated_at, model_provider, model_name, uploaded_by)
+            VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, 'uploaded', NULL, ?, ?, ?, ?, ?)
         """, (id, bucket, original_key, filename, language, content_type, size_bytes,
-              etag_original, now, now, model_provider, model_name))
+              etag_original, now, now, model_provider, model_name, uploaded_by))
 
 def set_text_pointer(
     id: str,

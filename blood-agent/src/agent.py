@@ -33,7 +33,8 @@ def _register_tools(agent: Agent):
             cfg=ctx.deps.minio_config,
             filepath=ctx.deps.filepath,
             language=ctx.deps.language,
-            model_config=model_config
+            model_config=model_config,
+            uploaded_by=getattr(ctx.deps, "uploaded_by", None),
         )
 
         return ctx.deps.doc_id

@@ -71,6 +71,7 @@ class AgentDependencies(BaseModel):
     filepath: Optional[str] = None        # If you have a file that needs OCR first
     language: Optional[str] = None
     doc_id: Optional[str] = None          # If you already have a stored TXT
+    uploaded_by: Optional[str] = None     # username who uploaded the document
 
     # Control which stage(s) to run
     mode: Literal["ingest_only", "anonymize_only", "ingest_then_anonymize", "auto"] = "auto"
