@@ -2,9 +2,9 @@ from pydantic import BaseModel
 from typing import Optional, Any
 
 class AgentResponse(BaseModel):
-    doc_id: str
-    text_key: Optional[str]
-    anonymized_key: Optional[str]
-    json_key: Optional[str]
-    loinc_key: Optional[str]
-    output: Any
+    doc_id: Optional[str] = None
+    text_key: Optional[str] = None
+    anonymized_key: Optional[str] = None
+    json_key: Optional[str] = None
+    loinc_key: Optional[str] = None
+    output: Any = None

@@ -2,7 +2,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes import router
 
-app = FastAPI(title="Blood Agent API")
+from dotenv import load_dotenv
+
+load_dotenv()
+
+app = FastAPI(
+    title="Blood Agent API",
+    description="AI-powered blood test analysis",
+    version="1.0.0"
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -13,3 +21,16 @@ app.add_middleware(
 )
 
 app.include_router(router)
+if __name__ == "__main__":
+    import uvicorn
+
+    print("Starting Blood Agent API...")
+    print("Swagger UI: http://localhost:8000/docs")
+    print("=" * 60)
+
+    uvicorn.run(
+        "main:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=True
+    )

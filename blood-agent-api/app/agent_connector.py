@@ -1,25 +1,47 @@
-from blood_agent.src.agent import blood_agent
-from blood_agent.src.deps import AgentDependencies
 import uuid
+import tempfile
+import os
+import sys
+from pathlib import Path
 
-def run_agent_with_file(prompt: str, file_bytes: bytes, filename: str):
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'blood-agent'))
 
-    doc_id = str(uuid.uuid4())
+from src.agent import create_blood_agent
+from src.models import AgentDependencies
+from src.model_config import get_model_config
+from storage.minio_storage import MinioConfig, client
 
-    deps = AgentDependencies(
-        file_bytes=file_bytes,
-        filename=filename,
-        doc_id=doc_id,
-        language="mkd+eng"
-    )
 
-    result = blood_agent.run_sync(prompt, deps)
+async def run_agent_with_file(prompt: str, file_bytes: bytes, filename: str):
+    suffix = Path(filename).suffix
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+        tmp_file.write(file_bytes)
+        tmp_filepath = tmp_file.name
 
-    return {
-        "doc_id": doc_id,
-        "text_key": deps.text_key,
-        "anonymized_key": deps.anonymized_key,
-        "json_key": deps.json_key,
-        "loinc_key": deps.loinc_key,
-        "output": result.output
-    }
+    try:
+        cfg = MinioConfig()
+        mc = client(cfg)
+
+        deps = AgentDependencies(
+            minio_client=mc,
+            minio_config=cfg,
+            filepath=tmp_filepath,
+            language="mkd+eng"
+        )
+
+        model_config = get_model_config()
+        blood_agent = create_blood_agent(model_config)
+
+        result = await blood_agent.run(prompt, deps=deps)
+
+        return {
+            "doc_id": deps.doc_id,
+            "text_key": getattr(deps, 'text_key', None),
+            "anonymized_key": getattr(deps, 'anonymized_key', None),
+            "json_key": getattr(deps, 'json_key', None),
+            "loinc_key": getattr(deps, 'loinc_key', None),
+            "output": str(result.data) if hasattr(result, 'data') else str(result.output)
+        }
+    finally:
+        if os.path.exists(tmp_filepath):
+            os.remove(tmp_filepath)

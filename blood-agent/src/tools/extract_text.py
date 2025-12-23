@@ -61,17 +61,19 @@ def extract_text(inp: ExtractTextInput) -> RawText:
     return RawText(text=text, source_name=os.path.basename(inp.filepath), language=lang)
 
 
-# Helper functions provided in the prompt
 def pdf_to_images(pdf_path: str, dpi: int = 200) -> List[Image.Image]:
-    """
-    Convert PDF pages to PIL Images
-    """
+    poppler_bin = os.getenv("POPPLER_PATH", None)
+
     try:
-        # Convert PDF to images
-        images = convert_from_path(pdf_path, dpi=dpi)
+        images = convert_from_path(pdf_path, dpi=dpi, poppler_path=poppler_bin)
         return images
     except Exception as e:
-        raise Exception(f"Error converting PDF to images: {str(e)}")
+        error_msg = str(e)
+        if "PDFInfoNotInstalledError" in error_msg:
+            raise Exception(
+                "Error: Poppler not found!"
+            )
+        raise Exception(f"Error converting PDF to images: {error_msg}")
 
 
 def image_to_base64(image: Image) -> str:
@@ -79,7 +81,6 @@ def image_to_base64(image: Image) -> str:
     Convert PIL Image to base64 string for LLM input
     """
     buffer = io.BytesIO()
-    # Convert to RGB if necessary
     if image.mode != "RGB":
         image = image.convert("RGB")
     image.save(buffer, format="JPEG", quality=95)
@@ -102,10 +103,8 @@ def image_to_text_with_llm(image: Image, vision_model, prompt: str = None) -> Ra
 
             Only return the extracted text, no additional commentary."""
 
-        # Convert image to base64
         img_base64 = image_to_base64(image)
 
-        # Create message with image
         messages = [
             {
                 "role": "user",
@@ -119,10 +118,8 @@ def image_to_text_with_llm(image: Image, vision_model, prompt: str = None) -> Ra
             }
         ]
 
-        # Send to vision model (this depends on your vision model setup)
-        # Note: This is a placeholder for your actual LLM client call
         response = vision_model.chat.completions.create(
-            model="gpt-4o", messages=messages, max_tokens=2048  # Example model
+            model="gpt-4o", messages=messages, max_tokens=2048
         )
         return response.choices[0].message.content.strip()
 
@@ -168,50 +165,26 @@ IMPORTANT INSTRUCTIONS:
 
 Extract the text{lang_instruction} maintaining maximum fidelity to the original document:"""
 
+
     return prompt
 
 
-# ---
-
-
 def _is_valid_extracted_text(text: str) -> bool:
-    """
-    Checks if the LLM response appears to be actual extracted text rather than a refusal message.
-    Returns True if the text seems valid, False if it looks like a refusal or error.
-    """
     if not text or len(text.strip()) < 10:
         return False
 
     text_lower = text.lower()
-
-    # Common refusal/error patterns
     refusal_patterns = [
-        "i can't assist",
-        "i cannot assist",
-        "i'm unable to",
-        "i am unable to",
-        "there is no text",
-        "no text to extract",
-        "cannot extract",
-        "unable to extract",
-        "i don't see",
-        "i do not see",
-        "there doesn't appear",
-        "there does not appear",
-        "sorry, but",
-        "i apologize",
-        "as an ai",
+        "i can't assist", "i cannot assist", "i'm unable to", "i am unable to",
+        "there is no text", "no text to extract", "cannot extract", "unable to extract",
+        "i don't see", "i do not see", "sorry, but", "as an ai",
     ]
 
-    # Check if the response starts with or contains refusal patterns
     for pattern in refusal_patterns:
         if pattern in text_lower:
             return False
 
-    # Additional check: if response is very short and doesn't contain typical document text
-    # (numbers, common medical terms, etc.), it might not be extracted text
     if len(text.strip()) < 50:
-        # Check for presence of numbers or common document characters
         has_numbers = any(c.isdigit() for c in text)
         has_common_chars = any(c in text for c in ["-", ":", "/", "."])
         if not (has_numbers or has_common_chars):
@@ -223,33 +196,19 @@ def _is_valid_extracted_text(text: str) -> bool:
 def _extract_text_from_image_llm(
         image: Image.Image, prompt: str, max_retries: int = 3, model_config=None
 ) -> str:
-    """
-    Attempts to extract text from an image using LLM with retry logic.
-    Returns the extracted text or empty string if all attempts fail.
-    """
     if model_config is None:
         model_config = get_model_config()
 
     img_array = np.array(image)
     img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-
     retval, buffer = cv2.imencode(".jpg", img_bgr)
     image_bytes = buffer.tobytes()
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
-    # More explicit prompts for retries
     prompts = [
-        prompt,  # Original prompt
-        (
-            "You are an OCR system. Your ONLY task is to transcribe ALL visible text from this image. "
-            "Return ONLY the raw text content exactly as it appears, without any explanations, apologies, or commentary. "
-            "If you see text, transcribe it. If you see no text, return an empty string. "
-            "Do not refuse. Do not explain. Only transcribe."
-        ),
-        (
-            "Extract and return ALL text visible in this image. Return the text content only, nothing else. "
-            "No explanations, no apologies, no commentary - just the transcribed text from the image."
-        ),
+        prompt,
+        "You are an OCR system. Return ONLY the raw text exactly as it appears.",
+        "Extract and return ALL text visible in this image. No commentary."
     ]
 
     client = model_config.get_openai_client()
@@ -264,9 +223,7 @@ def _extract_text_from_image_llm(
                         {"type": "text", "text": current_prompt},
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
-                            },
+                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
                         },
                     ],
                 }
@@ -279,49 +236,26 @@ def _extract_text_from_image_llm(
             extracted_text = response.choices[0].message.content
 
             if _is_valid_extracted_text(extracted_text):
-                print(extracted_text)
                 return extracted_text
-            else:
-                print(
-                    f"Retry attempt {attempt + 1}: LLM returned invalid response, retrying..."
-                )
-                if attempt < max_retries - 1:
-                    continue
 
         except Exception as e:
             print(f"LLM extraction attempt {attempt + 1} failed: {e}")
-            if attempt < max_retries - 1:
-                continue
 
-    return ""  # Return empty string if all LLM attempts failed
+    return ""
 
 
 def _extract_text_from_image_ocr(image: Image.Image, lang: str | None) -> str:
-    """
-    Fallback: Extract text from image using OCR (pytesseract).
-    """
     try:
         return pytesseract.image_to_string(image, lang=lang)
     except Exception as e:
-        print(f"OCR extraction failed: {e}")
         return f"[Error: OCR extraction failed: {e}]"
 
 
 def extract_text_with_llm(inp: ExtractTextInput, model_config=None) -> str:
-    """
-    Processes a file (image or PDF) and extracts text from it using a Vision LLM.
-
-    This function handles both single images and multi-page PDFs by converting
-    them into a list of images, then uses a Vision LLM to extract text from each
-    image, and finally concatenates the results.
-
-    If LLM extraction fails or returns invalid results, falls back to OCR.
-    """
     if model_config is None:
         model_config = get_model_config()
-    
-    all_extracted_text = []
 
+    all_extracted_text = []
     mime, _ = mimetypes.guess_type(inp.filepath)
 
     if mime and "pdf" in mime:
@@ -330,34 +264,20 @@ def extract_text_with_llm(inp: ExtractTextInput, model_config=None) -> str:
         images = [Image.open(inp.filepath)]
 
     page_prompt = (
-        "Extract all text from the provided medical laboratory report page and return it as a single continuous string. "
-        "This is for record-keeping and documentation purposes only. "
-        "Preserve original formatting elements such as line breaks, spacing, and indentation as much as possible. "
-        "Replace any personally identifiable information (PII) such as names, addresses, and identification numbers with '[REDACTED]'. "
-        "Only return the transcribed text content including test names, values, and reference ranges. "
-        "Exclude explanations, metadata, or non-textual elements. "
-        "Do not interpret results or provide medical advice."
+        "Extract all text from the provided medical laboratory report page. "
+        "Redact PII with '[REDACTED]'. "
+        "Return only the text content."
     )
 
     for i, image in enumerate(images):
-        print(f"Processing page/image {i + 1}/{len(images)} with LLM...")
-
-        # Try LLM extraction first with retries
         extracted_text = _extract_text_from_image_llm(image, page_prompt, max_retries=3, model_config=model_config)
 
-        # If LLM extraction failed or returned invalid result, fall back to OCR
         if not extracted_text or not _is_valid_extracted_text(extracted_text):
-            print(f"LLM extraction failed for page {i + 1}, falling back to OCR...")
             extracted_text = _extract_text_from_image_ocr(image, inp.language)
 
         if extracted_text:
-            print(f"Successfully extracted text from page {i + 1}")
             all_extracted_text.append(extracted_text)
         else:
-            print(f"Failed to extract text from page {i + 1} using both LLM and OCR")
-            all_extracted_text.append(
-                f"[Error: Could not extract text from page {i + 1}]"
-            )
+            all_extracted_text.append(f"[Error: Could not extract text from page {i + 1}]")
 
-    final_text = "\n".join(all_extracted_text)
-    return final_text
+    return "\n".join(all_extracted_text)

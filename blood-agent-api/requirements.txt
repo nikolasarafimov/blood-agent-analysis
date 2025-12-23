@@ -4,3 +4,6 @@ python-multipart
 pydantic
 minio
 openai
+
+python-dotenv
+pydantic-ai
