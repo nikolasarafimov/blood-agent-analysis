@@ -1,14 +1,9 @@
 import React from "react";
+import "../App.css";
 
 function FileUpload({ onFileSelect }) {
     return (
-        <div style={{
-            border: "2px dashed #999",
-            padding: "20px",
-            borderRadius: "10px",
-            textAlign: "center",
-            cursor: "pointer"
-        }}>
+        <div className="file-upload">
             <input
                 type="file"
                 style={{ display: "none" }}
