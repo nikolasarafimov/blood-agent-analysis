@@ -25,19 +25,17 @@ def ingest_then_extract(mc: Minio, cfg: MinioConfig, filepath: str, language: Op
     6) Update record (status=processed)
     """
 
+
     init_db()
     ensure_bucket(mc, cfg.bronze_bucket)
 
-    # Get model config early so we can store it in the record
     if model_config is None:
         model_config = get_model_config()
 
     doc_id = str(datetime.datetime.now())
 
-    # 1) upload original FIRST
     original_key, ctype, etag, size = put_original(mc, cfg.bronze_bucket, filepath, doc_id)
 
-    # 2) insert metadata row with model information
     insert_record(
         id=doc_id,
         bucket=cfg.bronze_bucket,
@@ -52,17 +50,14 @@ def ingest_then_extract(mc: Minio, cfg: MinioConfig, filepath: str, language: Op
     )
 
     try:
-        # 3) extract text
 
         out = extract_text_with_llm(ExtractTextInput(filepath=filepath, language=language), model_config=model_config)
         text = out.text if hasattr(out, "text") else str(out)
 
         print(text)
 
-        # 4) upload .txt with SAME doc_id
         text_key, text_etag = put_text(mc, cfg.bronze_bucket, doc_id, text)
 
-        # 5) update row
         set_text_pointer(doc_id, text_key=text_key, etag_text=text_etag)
 
         return doc_id

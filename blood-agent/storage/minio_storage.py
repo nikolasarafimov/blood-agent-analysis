@@ -66,3 +66,17 @@ def put_json(mc: Minio, bucket: str, doc_id: str, obj: dict) -> str:
         content_type="application/json; charset=utf-8"
     )
     return key
+
+
+
+def get_json(mc: Minio, bucket: str, key: str) -> dict:
+    """
+    Read a JSON object from MinIO and return it as a Python dict.
+    """
+    resp = mc.get_object(bucket, key)
+    try:
+        data = resp.read()
+    finally:
+        resp.close()
+        resp.release_conn()
+    return json.loads(data.decode("utf-8"))

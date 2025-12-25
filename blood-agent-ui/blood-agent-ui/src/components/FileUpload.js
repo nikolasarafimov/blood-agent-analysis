@@ -1,23 +1,26 @@
 import React from "react";
 import "../App.css";
 
-function FileUpload({ onFileSelect }) {
-    return (
-        <div className="file-upload">
-            <input
-                type="file"
-                style={{ display: "none" }}
-                id="fileInput"
-                onChange={(e) => onFileSelect(e.target.files[0])}
-            />
+function FileUpload({ files, setFiles }) {
+  const handleChange = (e) => {
+    const selected = Array.from(e.target.files);
 
-            <label htmlFor="fileInput" style={{ cursor: "pointer" }}>
-                <strong>Click to upload file</strong>
-                <br />
-                (PDF, JSON, TXT, Image)
-            </label>
-        </div>
-    );
+
+    setFiles(prev => [...prev, ...selected]);
+    e.target.value = "";
+  };
+
+  return (
+    <>
+      <input
+        type="file"
+        id="fileInput"
+        style={{ display: "none" }}
+        multiple
+        onChange={handleChange}
+      />
+    </>
+  );
 }
 
 export default FileUpload;

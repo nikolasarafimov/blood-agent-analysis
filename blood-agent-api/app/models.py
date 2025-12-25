@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, Any
+from typing import Optional, Any, List
 
 class AgentResponse(BaseModel):
     doc_id: Optional[str] = None
@@ -7,4 +7,5 @@ class AgentResponse(BaseModel):
     anonymized_key: Optional[str] = None
     json_key: Optional[str] = None
     loinc_key: Optional[str] = None
-    output: Any = None
+    output: Optional[str] = None
+AgentResponseList = List[AgentResponse]
