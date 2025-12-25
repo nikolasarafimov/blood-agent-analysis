@@ -1,6 +1,5 @@
 import React, { useState } from "react";
-import axios from "axios";
-
+import "./App.css";
 import FileUpload from "./components/FileUpload";
 import PromptInput from "./components/PromptInput";
 import ChatWindow from "./components/ChatWindow";
@@ -25,13 +24,19 @@ function App() {
         formData.append("prompt", prompt);
 
         try {
-            const response = await axios.post(
-                "http://localhost:8000/run-agent",
-                formData,
-                { headers: { "Content-Type": "multipart/form-data" } }
-            );
+            const response = await fetch("http://localhost:8000/run-agent", {
+    method: "POST",
+    body: formData
+});
 
-            const agentOutput = JSON.stringify(response.data, null, 2);
+if (!response.ok) {
+    throw new Error("Server error");
+}
+
+const data = await response.json();
+
+const agentOutput = JSON.stringify(data, null, 2);
+
 
             setMessages(prev => [...prev, {
                 sender: "agent",

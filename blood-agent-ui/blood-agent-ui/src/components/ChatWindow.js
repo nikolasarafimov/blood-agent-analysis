@@ -1,15 +1,8 @@
 import React from "react";
-
+import "../App.css";
 function ChatWindow({ messages }) {
     return (
-        <div style={{
-            border: "1px solid #ddd",
-            borderRadius: "10px",
-            padding: "10px",
-            minHeight: "200px",
-            marginTop: "20px",
-            backgroundColor: "#fafafa"
-        }}>
+        <div className="chat-window">
             {messages.map((msg, index) => (
                 <div
                     key={index}
@@ -18,17 +11,9 @@ function ChatWindow({ messages }) {
                         textAlign: msg.sender === "user" ? "right" : "left"
                     }}
                 >
-                    <div
-                        style={{
-                            display: "inline-block",
-                            padding: "10px",
-                            borderRadius: "10px",
-                            backgroundColor:
-                                msg.sender === "user" ? "#dff8d8" : "#eeeeee"
-                        }}
-                    >
-                        {msg.text}
-                    </div>
+                    <div className={`message ${msg.sender}`}>
+  {msg.text}
+</div>
                 </div>
             ))}
         </div>
