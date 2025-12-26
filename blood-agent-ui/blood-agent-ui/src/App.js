@@ -75,8 +75,6 @@ function App() {
   setFiles([]);
 };
 
-
-
   return (
     <div className="gpt-shell">
       <div className="gpt-main">
