@@ -96,5 +96,4 @@ def get_blood_agent() -> Agent:
     return create_blood_agent(get_model_config())
 
 
-# Convenience instance (so demo.py can import it)
 blood_agent = get_blood_agent()

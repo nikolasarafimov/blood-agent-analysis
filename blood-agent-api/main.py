@@ -28,7 +28,6 @@ app.add_middleware(
 
 @app.on_event("startup")
 def _startup():
-    # Initialize the DB schema used by the blood-agent package (documents + lab_rows)
     init_agent_db()
 
 app.include_router(router)

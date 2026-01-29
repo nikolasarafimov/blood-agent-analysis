@@ -1,4 +1,3 @@
-# src/tools/txt_to_json.py
 from __future__ import annotations
 
 import json
@@ -37,7 +36,6 @@ def _is_valid_json_result(result: dict) -> bool:
     if "parameter" not in first or "value" not in first:
         return False
 
-    # refusal-ish patterns
     param_str = str(first.get("parameter", "")).lower()
     refusal_patterns = ["i can't", "i cannot", "sorry", "unable", "error", "refuse"]
     if any(p in param_str for p in refusal_patterns):
@@ -54,14 +52,12 @@ def _extract_json_from_text(s: str) -> Optional[dict]:
         return None
     s = s.strip()
 
-    # already pure json
     try:
         obj = json.loads(s)
         return obj if isinstance(obj, dict) else None
     except Exception:
         pass
 
-    # try to locate first {...} block
     start = s.find("{")
     end = s.rfind("}")
     if start == -1 or end == -1 or end <= start:
@@ -136,7 +132,6 @@ Rules:
             system_prompt = system_prompts[min(attempt, len(system_prompts) - 1)]
             user_prompt = user_prompts[min(attempt, len(user_prompts) - 1)]
 
-            # Prefer structured parse if available; fall back if not supported.
             try:
                 response = client.beta.chat.completions.parse(
                     model=model_config.model_name,
@@ -169,7 +164,7 @@ Rules:
                 last_good = result_dict
                 return result_dict
 
-            last_good = result_dict  # keep last attempt even if weak
+            last_good = result_dict
             if attempt < max_retries - 1:
                 continue
             return result_dict
@@ -196,7 +191,6 @@ def parse_to_json(mc: Minio, cfg: MinioConfig, doc_id: str, model_config=None) -
     if not rec:
         raise ValueError(f"record {doc_id} not found")
 
-    # Prefer editable text, then anonymized, then extracted.
     text_pointer = rec.get("editable_text_key") or rec.get("anonymized_txt") or rec.get("text_key")
     if not text_pointer:
         raise ValueError(f"record {doc_id} has no text pointer yet")
@@ -204,7 +198,6 @@ def parse_to_json(mc: Minio, cfg: MinioConfig, doc_id: str, model_config=None) -
     ensure_bucket(mc, cfg.bronze_bucket)
     ensure_bucket(mc, cfg.silver_bucket)
 
-    # Determine bucket for text pointer
     if rec.get("editable_text_key") or rec.get("anonymized_txt"):
         text_bucket = cfg.silver_bucket
     else:

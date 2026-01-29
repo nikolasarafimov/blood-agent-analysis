@@ -9,8 +9,8 @@ services:
       MINIO_ROOT_PASSWORD: admin123
     command: server /data --console-address ":9090"
     ports:
-      - "9000:9000"   # S3 endpoint
-      - "9090:9090"   # MinIO console
+      - "9000:9000"
+      - "9090:9090"
     volumes:
       - minio-data:/data
     healthcheck:
@@ -20,7 +20,6 @@ services:
       retries: 20
     restart: unless-stopped
 
-  # Creates buckets after MinIO is healthy
   minio-init:
     image: quay.io/minio/mc:latest
     container_name: blood-agent-minio-init
@@ -42,7 +41,6 @@ services:
       dockerfile: blood-agent-api/Dockerfile
     container_name: blood-agent-api
     environment:
-      # MinIO connection (matches your MinioConfig env names)
       MINIO_ENDPOINT: "minio:9000"
       MINIO_ACCESS_KEY: "admin"
       MINIO_SECRET_KEY: "admin123"
@@ -50,17 +48,12 @@ services:
       MINIO_BRONZE_BUCKET: "bronze"
       MINIO_SILVER_BUCKET: "silver"
 
-      # SQLite (matches sqlite_db.py: SQLITE_DB_PATH -> DB_PATH -> bronze.sqlite3)
       SQLITE_DB_PATH: "/data/bronze.sqlite3"
 
-      # Model config
       MODEL_PROVIDER: "openai"
       MODEL_NAME: "gpt-4o"
       OPENAI_API_KEY: "${OPENAI_API_KEY}"
 
-      # Optional toggles
-      # USE_LLM_OCR: "false"
-      # POPPLER_PATH: "/usr/bin"  # only if your Dockerfile installs poppler somewhere non-standard
     ports:
       - "8000:8000"
     depends_on:
@@ -82,8 +75,6 @@ services:
     depends_on:
       - api
     restart: unless-stopped
-
-
 
 volumes:
   minio-data:

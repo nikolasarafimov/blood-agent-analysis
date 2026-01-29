@@ -77,25 +77,20 @@ def ingest_then_extract(
     doc_id = str(uuid.uuid4())
     filename = fp.name
 
-    # Create DB record early
     insert_record(doc_id, bucket=cfg.bronze_bucket, key=None, status="created", filename=filename)
 
     try:
-        # 1) store original
         orig_key, _ctype, _etag, _size = put_original(mc, cfg.bronze_bucket, str(fp), doc_id)
         set_original_pointer(doc_id, cfg.bronze_bucket, orig_key)
         set_status(doc_id, "original_stored")
 
-        # 2) preview (best-effort)
         try:
             preview_key = create_preview_and_store(mc, cfg, doc_id, str(fp))
             if preview_key:
                 set_preview_image_key(doc_id, preview_key, bucket=cfg.bronze_bucket)
         except Exception:
-            # preview is not critical
             pass
 
-        # 3) extract text
         raw = ingest_extract_text(
             filepath=str(fp),
             language=language,
@@ -103,7 +98,6 @@ def ingest_then_extract(
             model_config=model_config,
         )
 
-        # 4) store extracted text in bronze
         text_key, _etag2 = put_text(mc, cfg.bronze_bucket, doc_id, raw.text)
         set_text_pointer(doc_id, key=text_key, bucket=cfg.bronze_bucket)
         set_status(doc_id, "extracted")

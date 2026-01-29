@@ -1,4 +1,3 @@
-// blood-agent-ui/src/components/JsonTableEditor.js
 import React, { useMemo, useState } from "react";
 import {
   Box,

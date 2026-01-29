@@ -129,7 +129,7 @@ class ModelConfig:
                     {"role": "user", "content": [{"type": "text", "text": user}]},
                 ],
             )
-            # anthropic returns content blocks
+
             parts = []
             for block in msg.content or []:
                 if getattr(block, "type", None) == "text":
@@ -174,11 +174,9 @@ class ModelConfig:
         if self.provider_enum == ModelProvider.ANTHROPIC:
             import anthropic
 
-            # Validate base64
             try:
                 base64.b64decode(image_base64_jpeg.encode("utf-8"), validate=True)
             except Exception:
-                # still try, but don't crash
                 pass
 
             c = anthropic.Anthropic(api_key=self.api_key)

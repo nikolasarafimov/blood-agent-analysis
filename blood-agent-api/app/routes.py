@@ -1,4 +1,3 @@
-# blood-agent-api/app/routes.py
 from __future__ import annotations
 
 import io
@@ -33,9 +32,6 @@ from storage.minio_storage import (
 router = APIRouter()
 
 
-# ----------------------------
-# Helpers
-# ----------------------------
 def _file_url(request: Request, bucket: str, key: Optional[str]) -> Optional[str]:
     """
     Build an absolute URL to a stored object served via /files/{bucket}/{key}.
@@ -43,7 +39,7 @@ def _file_url(request: Request, bucket: str, key: Optional[str]) -> Optional[str
     """
     if not key:
         return None
-    base = str(request.base_url).rstrip("/")  # e.g. http://localhost:8000
+    base = str(request.base_url).rstrip("/")
     safe_key = quote(key, safe="/")
     return f"{base}/files/{bucket}/{safe_key}"
 
@@ -78,10 +74,6 @@ def _max_upload_bytes() -> int:
     max_mb = int(os.getenv("MAX_UPLOAD_MB", "20"))
     return max_mb * 1024 * 1024
 
-
-# ----------------------------
-# Request models
-# ----------------------------
 class SaveTextRequest(BaseModel):
     type: Literal["extracted", "anonymized", "json"]
     content: str = ""
@@ -106,9 +98,6 @@ class RunAgentResult(BaseModel):
     output: Optional[str] = None
 
 
-# ----------------------------
-# Endpoints
-# ----------------------------
 @router.post("/run-agent", summary="Upload and process documents", response_model=List[RunAgentResult])
 async def run_agent_endpoint(
     request: Request,
@@ -117,7 +106,6 @@ async def run_agent_endpoint(
 ):
     max_bytes = _max_upload_bytes()
 
-    # Read uploaded files into memory (simple approach)
     file_payloads: List[tuple[bytes, str]] = []
     for f in files:
         name = f.filename or "upload.bin"
@@ -129,7 +117,6 @@ async def run_agent_endpoint(
             raise HTTPException(status_code=413, detail=f"file too large: {name} (max {max_mb}MB)")
         file_payloads.append((content, name))
 
-    # Run pipeline (creates DB record + uploads artifacts)
     try:
         results = await run_pipeline_with_files(prompt, file_payloads)
     except Exception as e:
@@ -255,7 +242,6 @@ async def save_doc_text(doc_id: str, body: SaveTextRequest):
         set_editable_text_key(doc_id, editable_text_key=key)
         return {"ok": True, "key": key}
 
-    # Save edited JSON
     try:
         obj = json.loads(body.content or "")
         if not isinstance(obj, dict):
@@ -284,7 +270,6 @@ async def regenerate_json(doc_id: str):
     mc = client(cfg)
     rec = _require_record(doc_id)
 
-    # Use editable text if present else anonymized else extracted
     text_key = rec.get("editable_text_key") or rec.get("anonymized_txt")
     if text_key:
         text = get_text_object(mc, cfg.silver_bucket, text_key)
@@ -350,7 +335,6 @@ async def delete_document(doc_id: str):
 
     prefix = f"documents/{doc_id}/"
 
-    # Delete artifacts in both tiers; tolerate missing objects
     try:
         delete_prefix(mc, cfg.bronze_bucket, prefix)
     except Exception:

@@ -27,7 +27,6 @@ def _run_pipeline_sync(prompt: str, file_bytes: bytes, filename: str, language: 
         mc = client(cfg)
         model_config = get_model_config()
 
-        # 1) ingest + extract
         doc_id = ingest_then_extract(
             mc=mc,
             cfg=cfg,
@@ -36,19 +35,15 @@ def _run_pipeline_sync(prompt: str, file_bytes: bytes, filename: str, language: 
             model_config=model_config,
         )
 
-        # Store the original upload filename for UI
         try:
             set_filename(doc_id, filename)
         except Exception:
             pass
 
-        # 2) anonymize
         anonymize_and_store_by_doc_id(mc, cfg, doc_id, model_config=model_config)
 
-        # 3) text->json
         parse_to_json(mc, cfg, doc_id, model_config=model_config)
 
-        # 4) json->loinc
         validate_and_enrich_loinc_codes(mc, cfg, doc_id, model_config=model_config)
 
         rec = get_record(doc_id) or {}
@@ -69,7 +64,6 @@ async def run_pipeline_with_file(prompt: str, file_bytes: bytes, filename: str) 
 
 
 async def run_pipeline_with_files(prompt: str, files: List[Tuple[bytes, str]]) -> List[Dict[str, Any]]:
-    # Run sequentially (safe). If you want concurrency later, use asyncio.gather with a limit.
     results: List[Dict[str, Any]] = []
     for file_bytes, filename in files:
         res = await run_pipeline_with_file(prompt, file_bytes, filename)

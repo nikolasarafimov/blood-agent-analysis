@@ -18,8 +18,6 @@ class MinioConfig:
     access_key: str = field(default_factory=lambda: os.getenv("MINIO_ACCESS_KEY", "minio"))
     secret_key: str = field(default_factory=lambda: os.getenv("MINIO_SECRET_KEY", "minio123"))
     secure: bool = field(default_factory=lambda: os.getenv("MINIO_SECURE", "false").lower() == "true")
-
-    # NOTE: These env var names should match your docker-compose.yml
     bronze_bucket: str = field(default_factory=lambda: os.getenv("MINIO_BRONZE_BUCKET", os.getenv("MINIO_BUCKET", "bronze")))
     silver_bucket: str = field(default_factory=lambda: os.getenv("MINIO_SILVER_BUCKET", os.getenv("SILVER_BUCKET", "silver")))
 
