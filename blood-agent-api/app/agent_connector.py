@@ -1,19 +1,23 @@
-import tempfile
 import os
-import sys
+import tempfile
 from pathlib import Path
+from typing import Any, Dict, List, Tuple
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "..", "blood-agent"))
+from starlette.concurrency import run_in_threadpool
 
-from src.agent import create_blood_agent
-from src.models import AgentDependencies
-from src.model_config import get_model_config
 from storage.minio_storage import MinioConfig, client
+from src.model_config import get_model_config
 from src.tools.ingest import ingest_then_extract
+from src.tools.anonymize import anonymize_and_store_by_doc_id
+from src.tools.txt_to_json import parse_to_json
+from src.tools.loinc_validation import validate_and_enrich_loinc_codes
+from db.sqlite_db import get_record, set_filename
 
 
-async def run_agent_with_file(prompt: str, file_bytes: bytes, filename: str):
-    suffix = Path(filename).suffix
+def _run_pipeline_sync(prompt: str, file_bytes: bytes, filename: str, language: str = "mkd+eng") -> Dict[str, Any]:
+    suffix = Path(filename).suffix or ".bin"
+    tmp_filepath = None
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
         tmp_file.write(file_bytes)
         tmp_filepath = tmp_file.name
@@ -21,52 +25,53 @@ async def run_agent_with_file(prompt: str, file_bytes: bytes, filename: str):
     try:
         cfg = MinioConfig()
         mc = client(cfg)
+        model_config = get_model_config()
 
-        deps = AgentDependencies(
-            minio_client=mc,
-            minio_config=cfg,
-            filepath=tmp_filepath,
-            language="mkd+eng",
-        )
-
+        # 1) ingest + extract
         doc_id = ingest_then_extract(
             mc=mc,
             cfg=cfg,
             filepath=tmp_filepath,
-            language=deps.language,
+            language=language,
+            model_config=model_config,
         )
-        deps.doc_id = doc_id
 
-        model_config = get_model_config()
-        blood_agent = create_blood_agent(model_config)
-
+        # Store the original upload filename for UI
         try:
-            result = await blood_agent.run(prompt, deps=deps)
-            output = str(getattr(result, "output", ""))
-        except Exception as e:
-            output = f"[agent error] {e}"
+            set_filename(doc_id, filename)
+        except Exception:
+            pass
 
+        # 2) anonymize
+        anonymize_and_store_by_doc_id(mc, cfg, doc_id, model_config=model_config)
+
+        # 3) text->json
+        parse_to_json(mc, cfg, doc_id, model_config=model_config)
+
+        # 4) json->loinc
+        validate_and_enrich_loinc_codes(mc, cfg, doc_id, model_config=model_config)
+
+        rec = get_record(doc_id) or {}
         return {
-            "doc_id": deps.doc_id,
-            "text_key": getattr(deps, "text_key", None),
-            "anonymized_key": getattr(deps, "anonymized_key", None),
-            "json_key": getattr(deps, "json_key", None),
-            "loinc_key": getattr(deps, "loinc_key", None),
-            "output": output,
+            "doc_id": doc_id,
+            "preview_image_key": rec.get("preview_image_key"),
+            "original_key": rec.get("key") or rec.get("original_key"),
+            "output": "OK",
         }
 
     finally:
-        if os.path.exists(tmp_filepath):
+        if tmp_filepath and os.path.exists(tmp_filepath):
             os.remove(tmp_filepath)
 
 
-async def run_agent_with_files(prompt: str, files: list[tuple[bytes, str]]):
-    """
-    files: list of (file_bytes, filename)
-    """
-    results = []
-    for file_bytes, filename in files:
-        res = await run_agent_with_file(prompt, file_bytes, filename)
-        results.append(res)
+async def run_pipeline_with_file(prompt: str, file_bytes: bytes, filename: str) -> Dict[str, Any]:
+    return await run_in_threadpool(_run_pipeline_sync, prompt, file_bytes, filename)
 
+
+async def run_pipeline_with_files(prompt: str, files: List[Tuple[bytes, str]]) -> List[Dict[str, Any]]:
+    # Run sequentially (safe). If you want concurrency later, use asyncio.gather with a limit.
+    results: List[Dict[str, Any]] = []
+    for file_bytes, filename in files:
+        res = await run_pipeline_with_file(prompt, file_bytes, filename)
+        results.append(res)
     return results

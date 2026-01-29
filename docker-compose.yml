@@ -1,0 +1,90 @@
+version: "3.8"
+
+services:
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: blood-agent-minio
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: admin123
+    command: server /data --console-address ":9090"
+    ports:
+      - "9000:9000"   # S3 endpoint
+      - "9090:9090"   # MinIO console
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # Creates buckets after MinIO is healthy
+  minio-init:
+    image: quay.io/minio/mc:latest
+    container_name: blood-agent-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 admin admin123 &&
+      mc mb -p local/bronze || true &&
+      mc mb -p local/silver || true &&
+      echo 'MinIO buckets (bronze, silver) ready'
+      "
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: blood-agent-api/Dockerfile
+    container_name: blood-agent-api
+    environment:
+      # MinIO connection (matches your MinioConfig env names)
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "admin"
+      MINIO_SECRET_KEY: "admin123"
+      MINIO_SECURE: "false"
+      MINIO_BRONZE_BUCKET: "bronze"
+      MINIO_SILVER_BUCKET: "silver"
+
+      # SQLite (matches sqlite_db.py: SQLITE_DB_PATH -> DB_PATH -> bronze.sqlite3)
+      SQLITE_DB_PATH: "/data/bronze.sqlite3"
+
+      # Model config
+      MODEL_PROVIDER: "openai"
+      MODEL_NAME: "gpt-4o"
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+
+      # Optional toggles
+      # USE_LLM_OCR: "false"
+      # POPPLER_PATH: "/usr/bin"  # only if your Dockerfile installs poppler somewhere non-standard
+    ports:
+      - "8000:8000"
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    volumes:
+      - sqlite-data:/data
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: ./blood-agent-ui
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_API_URL: "http://localhost:8000"
+    container_name: blood-agent-ui
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+
+
+volumes:
+  minio-data:
+  sqlite-data:

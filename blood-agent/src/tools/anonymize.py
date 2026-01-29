@@ -1,33 +1,41 @@
 from __future__ import annotations
 
 import json
-from typing import Dict
+from typing import Dict, Optional, Tuple
 
 from minio import Minio
 from presidio_analyzer import AnalyzerEngine, Pattern, PatternRecognizer
 from presidio_anonymizer import AnonymizerEngine
 
-from db.sqlite_db import get_record, set_error, set_anonymized_txt, set_status
-from src.model_config import get_model_config
+from db.sqlite_db import (
+    get_record,
+    set_editable_text_key,
+    set_error,
+    set_status,
+    set_anonymized_text_pointer,
+)
+from src.model_config import get_model_config, ModelConfig
 from src.models import AnonymizeResult, AnonymizedText
-from storage.minio_storage import MinioConfig, put_anon_text, ensure_bucket
+from storage.minio_storage import MinioConfig, ensure_bucket, put_anon_text
 
 
-def anonymize_and_store_by_doc_id(mc: Minio, cfg: MinioConfig, doc_id: str, model_config=None) -> AnonymizeResult:
-    """
-    Load TXT from bronze for doc_id, anonymize it, store anonymized TXT back to bronze,
-    update DB pointer/status, and return pointers + stats.
-    """
+def anonymize_and_store_by_doc_id(
+    mc: Minio,
+    cfg: MinioConfig,
+    doc_id: str,
+    model_config: Optional[ModelConfig] = None,
+) -> AnonymizeResult:
     rec = get_record(doc_id)
     if not rec:
         raise ValueError(f"record {doc_id} not found")
+
     text_key = rec.get("text_key")
     if not text_key:
         raise ValueError(f"record {doc_id} has no txt pointer yet")
 
     ensure_bucket(mc, cfg.bronze_bucket)
+    ensure_bucket(mc, cfg.silver_bucket)
 
-    # 1) read raw txt
     obj = mc.get_object(cfg.bronze_bucket, text_key)
     try:
         raw_text = obj.read().decode("utf-8", errors="ignore")
@@ -35,63 +43,77 @@ def anonymize_and_store_by_doc_id(mc: Minio, cfg: MinioConfig, doc_id: str, mode
         obj.close()
         obj.release_conn()
 
-    # 2) anonymize
     try:
-        # anon_text, stats = anonymize_text(raw_text)
         anon_text = anonymize_text_with_llm(raw_text, model_config=model_config)
-    except Exception as e:
-        set_error(doc_id, f"anonymize failed: {e}")
-        raise
+        if isinstance(anon_text, dict):
+            anon_text = json.dumps(anon_text, ensure_ascii=False)
+    except Exception:
+        try:
+            anon_wrapped, _stats = anonymize_text(raw_text)
+            anon_text = anon_wrapped.text
+        except Exception as e2:
+            set_error(doc_id, f"anonymize failed: {e2}")
+            set_status(doc_id, "error")
+            raise
 
-    # 3) write anonymized txt to bronze
-    ensure_bucket(mc, cfg.silver_bucket)
-    anon_key, etag = put_anon_text(mc, cfg.silver_bucket, doc_id, anon_text)
-    # anon_key = f"documents/{doc_id}/anon_{doc_id}.txt"
-    # data = anon_text.encode("utf-8")
-    # mc.put_object(
-    #     cfg.bronze_bucket,
-    #     anon_key,
-    #     io.BytesIO(data),
-    #     length=len(data),
-    #     content_type="text/plain; charset=utf-8",
-    # )
+    anon_key, _etag = put_anon_text(mc, cfg.silver_bucket, doc_id, anon_text)
 
-    # 4) update DB
-    set_anonymized_txt(doc_id, anonymized_txt_pointer=anon_key)
-    set_status(doc_id, status="anonymized")
+    set_anonymized_text_pointer(doc_id, key=anon_key, bucket=cfg.silver_bucket)
+    set_editable_text_key(doc_id, anon_key)
+    set_status(doc_id, "anonymized")
 
-    return AnonymizeResult(doc_id=doc_id, bronze_bucket=cfg.bronze_bucket, anon_key=anon_key, text=anon_text)
+    return AnonymizeResult(
+        doc_id=doc_id,
+        bronze_bucket=cfg.bronze_bucket,
+        anon_key=anon_key,
+        text=anon_text,
+    )
 
 
-def anonymize_text(text: str) -> tuple[AnonymizedText, Dict[str, int]]:
-    """
-    Try Presidio; if not installed, fall back to regex.
-    Returns (anonymized_text, stats).
-    """
+def anonymize_text(text: str) -> Tuple[AnonymizedText, Dict[str, int]]:
     try:
-        # --- Presidio path ---
-
-        # Build analyzer once
         analyzer = AnalyzerEngine()
         anonymizer = AnonymizerEngine()
 
-        # Custom MK phone, numeric & textual dates, MRN, patient line
-        mk_phone = Pattern(name="MK_PHONE", regex=r"\b(?:\+389|0)\s?\d{2}\s?\d{3}\s?\d{3}\b", score=0.7)
-        num_date = Pattern(name="NUM_DATE", regex=r"\b\d{1,2}[./-]\d{1,2}[./-]\d{4}\b", score=0.7)
+        mk_phone = Pattern(
+            name="MK_PHONE",
+            regex=r"\b(?:\+389|0)\s?\d{2}\s?\d{3}\s?\d{3}\b",
+            score=0.7,
+        )
+        num_date = Pattern(
+            name="NUM_DATE",
+            regex=r"\b\d{1,2}[./-]\d{1,2}[./-]\d{4}\b",
+            score=0.7,
+        )
         txt_date = Pattern(
             name="TXT_DATE",
-            regex=r"\b(?:јан|фев|мар|апр|мај|јун|јул|авг|септ?|окт|ноем|дек|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+\d{1,2},?\s+\d{4}\b",
+            regex=r"\b(?:\u0458\u0430\u043d|\u0444\u0435\u0432|\u043c\u0430\u0440|\u0430\u043f\u0440|\u043c\u0430\u0458|\u0458\u0443\u043d|\u0458\u0443\u043b|\u0430\u0432\u0433|\u0441\u0435\u043f\u0442?|\u043e\u043a\u0442|\u043d\u043e\u0435\u043c|\u0434\u0435\u043a|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+\d{1,2},?\s+\d{4}\b",
             score=0.6,
         )
-        mrn = Pattern(name="MEDICAL_RECORD", regex=r"\b(?:MRN|EMR|Record|Досие)[\s:#-]*[A-ZА-Ш0-9-]{4,}\b", score=0.65)
-        patient_line = Pattern(name="PATIENT_LINE", regex=r"^(?:Patient|Пациент|Име)\s*[:\-–]\s*.*$", score=0.9)
+        mrn = Pattern(
+            name="MEDICAL_RECORD",
+            regex=r"\b(?:MRN|EMR|Record|\u0414\u043e\u0441\u0438\u0435)[\s:#-]*[A-Z\u0410-\u04280-9-]{4,}\b",
+            score=0.65,
+        )
+        patient_line = Pattern(
+            name="PATIENT_LINE",
+            regex=r"^(?:Patient|\u041f\u0430\u0446\u0438\u0435\u043d\u0442|\u0418\u043c\u0435)\s*[:\-–]\s*.*$",
+            score=0.9,
+        )
 
-        analyzer.registry.add_recognizer(PatternRecognizer(supported_entity="PHONE_NUMBER", patterns=[mk_phone]))
-        analyzer.registry.add_recognizer(PatternRecognizer(supported_entity="DATE_TIME", patterns=[num_date, txt_date]))
-        analyzer.registry.add_recognizer(PatternRecognizer(supported_entity="MEDICAL_RECORD", patterns=[mrn]))
-        analyzer.registry.add_recognizer(PatternRecognizer(supported_entity="PATIENT_LINE", patterns=[patient_line]))
+        analyzer.registry.add_recognizer(
+            PatternRecognizer(supported_entity="PHONE_NUMBER", patterns=[mk_phone])
+        )
+        analyzer.registry.add_recognizer(
+            PatternRecognizer(supported_entity="DATE_TIME", patterns=[num_date, txt_date])
+        )
+        analyzer.registry.add_recognizer(
+            PatternRecognizer(supported_entity="MEDICAL_RECORD", patterns=[mrn])
+        )
+        analyzer.registry.add_recognizer(
+            PatternRecognizer(supported_entity="PATIENT_LINE", patterns=[patient_line])
+        )
 
-        # Analyze + anonymize
         results = analyzer.analyze(text=text, language="en")
         operators = {
             "DEFAULT": {"type": "replace", "new_value": "<PII>"},
@@ -105,18 +127,22 @@ def anonymize_text(text: str) -> tuple[AnonymizedText, Dict[str, int]]:
         stats: Dict[str, int] = {}
         for r in results:
             stats[r.entity_type] = stats.get(r.entity_type, 0) + 1
+
         return AnonymizedText(text=anon.text), stats
 
     except Exception:
-        # --- Regex fallback (lightweight) ---
         import re
+
         EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
         PHONE = re.compile(r"\b(?:\+389|0)\s?\d{2}\s?\d{3}\s?\d{3}\b")
         DATE1 = re.compile(r"\b\d{1,2}[./-]\d{1,2}[./-]\d{4}\b")
-        DATE2 = re.compile(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\s+\d{1,2},\s+\d{4}\b",
-                           re.I)
+        DATE2 = re.compile(
+            r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\s+\d{1,2},\s+\d{4}\b",
+            re.I,
+        )
         IDLIKE = re.compile(r"\b(?:ID|MRN|EMR|Patient\s*ID)[:#]?\s*[A-Z0-9-]{5,}\b", re.I)
-        PATIENT_LINE = re.compile(r"^(?:Patient|Пациент)\s*[:\-]\s*.*$", re.I | re.M)
+        PATIENT_LINE = re.compile(r"^(?:Patient|\u041f\u0430\u0446\u0438\u0435\u043d\u0442)\s*[:\-]\s*.*$", re.I | re.M)
+
         stats = {"EMAIL": 0, "PHONE": 0, "DATE": 0, "ID": 0, "NAME": 0}
 
         def sub(pat, repl, s, key):
@@ -131,20 +157,15 @@ def anonymize_text(text: str) -> tuple[AnonymizedText, Dict[str, int]]:
         t = sub(DATE2, "<DATE>", t, "DATE")
         t = sub(IDLIKE, "<ID>", t, "ID")
         t = sub(PATIENT_LINE, "Patient: <NAME>", t, "NAME")
+
         return AnonymizedText(text=t), stats
 
 
 def _is_valid_anonymized_text(text: str, original_text: str) -> bool:
-    """
-    Checks if the LLM response appears to be valid anonymized text rather than a refusal message.
-    Returns True if the text seems valid, False if it looks like a refusal or error.
-    """
     if not text or len(text.strip()) < 10:
         return False
 
-    text_lower = text.lower()
-
-    # Common refusal/error patterns
+    tl = text.lower()
     refusal_patterns = [
         "i can't assist",
         "i cannot assist",
@@ -159,114 +180,106 @@ def _is_valid_anonymized_text(text: str, original_text: str) -> bool:
         "cannot process",
         "unable to process",
     ]
+    if any(p in tl for p in refusal_patterns):
+        return False
 
-    # Check if the response contains refusal patterns
-    for pattern in refusal_patterns:
-        if pattern in text_lower:
-            return False
-
-    # Check if the response is substantially different from original (should be, after anonymization)
-    # but still contains some medical content
     if len(text.strip()) < len(original_text.strip()) * 0.1:
-        # Too much removed might indicate an error
         return False
 
-    # Check for presence of medical-related content (numbers, common medical terms)
     has_numbers = any(c.isdigit() for c in text)
-    medical_terms = ["test", "result", "value", "range", "unit", "hemoglobin", "rbc", "wbc", "platelet"]
-    has_medical_content = any(term in text_lower for term in medical_terms)
+    medical_terms = [
+        "test",
+        "result",
+        "value",
+        "range",
+        "unit",
+        "hemoglobin",
+        "rbc",
+        "wbc",
+        "platelet",
+        "glucose",
+        "cholesterol",
+        "creatinine",
+    ]
+    has_medical_content = any(term in tl for term in medical_terms)
 
-    if not (has_numbers or has_medical_content):
-        return False
-
-    return True
+    return bool(has_numbers or has_medical_content)
 
 
-def anonymize_text_with_llm(blood_test_text: str, max_retries: int = 3, model_config=None) -> dict[str, str] | str:
-    """
-    Use LLM to anonymize medical text with retry logic. Returns only clinical info with PII/facility data redacted.
-    """
+def anonymize_text_with_llm(
+    blood_test_text: str,
+    max_retries: int = 3,
+    model_config: Optional[ModelConfig] = None,
+) -> str | Dict[str, str]:
     if model_config is None:
         model_config = get_model_config()
 
-    client = model_config.get_openai_client()
-
-    # More explicit prompts for retries
     system_prompts = [
-        """You are a medical data anonymization assistant. Your task is to remove ALL personally 
-    identifiable information (PII) and irrelevant data from the provided blood test report text while preserving all medical data 
-    and formatting. Return the same text with only PII and irrelevant text removed, leaving only the blood test data and results.""",
-        """You are an anonymization system. Remove ALL personal identifiers (names, dates, addresses, IDs, phone numbers) 
-    from the medical text while keeping ALL medical test data, values, and results intact. Return the anonymized text only, no explanations.""",
-        """Remove personal identifiers from this medical text. Keep all medical content. Return only the anonymized text.""",
+        (
+            "You are a medical data anonymization assistant. Remove ALL personally identifiable "
+            "information (PII) and irrelevant metadata from the provided blood test report while "
+            "preserving ALL medical data, values, units, reference ranges, and formatting. "
+            "Return ONLY the anonymized text. No explanations."
+        ),
+        (
+            "You are an anonymization system. Delete names, birth dates, addresses, phone numbers, "
+            "IDs, record numbers, facility/lab names, page numbers, headers/footers. "
+            "Keep every medical test name and result exactly as-is. Return ONLY anonymized text."
+        ),
+        "Remove PII from this medical text. Keep all medical content. Return only the anonymized text.",
     ]
 
-    base_user_prompt = """Please anonymize this blood test report. 
-Keep the text exactly as it is written, including formatting, line breaks, test names, values, reference ranges, and 
-physician notes about the results. Remove ALL personal identifiers (names, birth dates, addresses, phone numbers, 
-record numbers, etc.) and irrelevant metadata (laboratory names, page numbers, headers/footers). Do not reformat or 
-restructure. Do not omit medical content.
-
-Text to process:
-{blood_test_text}
-
-Return the same text with personal identifiers and irrelevant metadata removed. Leave only the medical data and results."""
-
     user_prompts = [
-        base_user_prompt.format(blood_test_text=blood_test_text),
-        f"""Anonymize this blood test text. Remove names, dates, IDs, phone numbers, addresses. Keep all test names, values, and medical data.
+        f"""Please anonymize this blood test report.
 
+Rules:
+- Keep the text exactly as written (formatting, line breaks, test names, values, units, reference ranges).
+- Remove ALL personal identifiers (names, birth dates, addresses, phone numbers, record numbers, etc.).
+- Remove irrelevant metadata (laboratory names, page numbers, headers/footers).
+- Do NOT summarize, reformat, or restructure.
+- Output ONLY the anonymized text (no commentary).
+
+TEXT:
+{blood_test_text}
+""",
+        f"""Anonymize this blood test text.
+
+Remove: names, dates of birth, IDs, addresses, phone numbers, facility/lab names, page headers/footers.
+Keep: all test names, values, ranges, units, and clinical notes.
+
+TEXT:
 {blood_test_text}
 
 Return anonymized text only.""",
-        f"""Remove PII from this text. Keep medical data.
+        f"""Remove personal identifiers and lab identifiers from the following text, keep medical results.
 
 {blood_test_text}""",
     ]
 
+    last_result: Optional[str] = None
+
     for attempt in range(max_retries):
+        system_prompt = system_prompts[min(attempt, len(system_prompts) - 1)]
+        user_prompt = user_prompts[min(attempt, len(user_prompts) - 1)]
         try:
-            system_prompt = system_prompts[min(attempt, len(system_prompts) - 1)]
-            user_prompt = user_prompts[min(attempt, len(user_prompts) - 1)]
-
-            response = client.chat.completions.create(
-                model=model_config.model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
+            result = model_config.chat_text(
+                system=system_prompt,
+                user=user_prompt,
                 temperature=0,
-                max_tokens=4096
+                max_tokens=4096,
             )
+            last_result = result
 
-            result = response.choices[0].message.content.strip()
-
-            # Validate the response
             if _is_valid_anonymized_text(result, blood_test_text):
                 return result
-            else:
-                print(f"Anonymization attempt {attempt + 1}: LLM returned invalid response, retrying...")
-                if attempt < max_retries - 1:
-                    continue
-                else:
-                    # Last attempt failed validation, but return the result anyway
-                    print("Warning: Anonymization validation failed, but returning result.")
-                    return result
 
-        except json.JSONDecodeError as e:
             if attempt < max_retries - 1:
-                print(f"Anonymization attempt {attempt + 1}: JSON decode error, retrying...")
                 continue
-            # If we have a response, return it, otherwise raise
-            if 'response' in locals() and response:
-                return {"raw_response": response.choices[0].message.content.strip()}
-            raise Exception(f"JSON decode error: {str(e)}")
+            return result
+
         except Exception as e:
-            print(f"Anonymization attempt {attempt + 1} failed: {e}")
             if attempt < max_retries - 1:
                 continue
-            else:
-                raise Exception(f"Error processing with LLM after {max_retries} attempts: {str(e)}")
+            raise Exception(f"Error processing with LLM after {max_retries} attempts: {str(e)}") from e
 
-    # Should not reach here, but just in case
-    raise Exception(f"Anonymization failed after {max_retries} attempts")
+    return last_result or ""

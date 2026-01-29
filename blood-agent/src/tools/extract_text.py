@@ -1,188 +1,136 @@
+from __future__ import annotations
+
 import base64
 import io
 import mimetypes
 import os
 import subprocess
-import tempfile
 from typing import List, Optional
 
-import cv2
-import numpy as np
 import pdfplumber
 import pytesseract
 from PIL import Image
 from pdf2image import convert_from_path
 from pydantic import BaseModel
 
-from ..model_config import get_model_config
+from ..model_config import get_model_config, ModelConfig
 from ..models import RawText
 
 
 class ExtractTextInput(BaseModel):
     filepath: str
-    language: str | None = None  # 'en' or 'mkd' for Tesseract
+    language: Optional[str] = None
 
 
 def _pdf_text_fast(path: str) -> str:
     with pdfplumber.open(path) as pdf:
-        return "\n".join([page.extract_text() or "" for page in pdf.pages]).strip()
+        parts: List[str] = []
+        for page in pdf.pages:
+            parts.append(page.extract_text() or "")
+        return "\n".join(parts).strip()
 
 
-def _pdf_to_ocr_text(path: str, lang: str | None) -> str:
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as out_pdf:
-        # Add text layer using OCRmyPDF (wraps Tesseract)
-        subprocess.run(
-            [
-                "ocrmypdf",
-                "--skip-text",
-                *(["-l", lang] if lang else []),
-                path,
-                out_pdf.name,
-            ],
-            check=True,
-        )
-        return _pdf_text_fast(out_pdf.name)
+def _pdf_to_images(path: str, dpi: int = 200) -> List[Image.Image]:
+    poppler_bin = os.getenv("POPPLER_PATH") or None
+    return convert_from_path(path, dpi=dpi, poppler_path=poppler_bin)
 
 
-def _image_to_text(path: str, lang: str | None) -> str:
-    img = Image.open(path)
-    return pytesseract.image_to_string(img, lang=lang)
+def _image_to_text_ocr(image: Image.Image, lang: Optional[str]) -> str:
+    try:
+        return pytesseract.image_to_string(image, lang=lang)
+    except Exception:
+        return pytesseract.image_to_string(image)
+
+
+def _pdf_to_ocr_text_via_images(path: str, lang: Optional[str]) -> str:
+    images = _pdf_to_images(path, dpi=250)
+    out: List[str] = []
+    for i, img in enumerate(images):
+        txt = _image_to_text_ocr(img, lang)
+        txt = (txt or "").strip()
+        out.append(txt if txt else f"[Error: Could not OCR page {i + 1}]")
+    return "\n\n".join(out).strip()
+
+
+def _pdf_to_ocr_text_via_ocrmypdf(path: str, lang: Optional[str]) -> Optional[str]:
+    try:
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as out_pdf:
+            cmd = ["ocrmypdf", "--skip-text"]
+            if lang:
+                cmd += ["-l", lang]
+            cmd += [path, out_pdf.name]
+            subprocess.run(cmd, check=True)
+            return _pdf_text_fast(out_pdf.name)
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
 
 
 def extract_text(inp: ExtractTextInput) -> RawText:
     mime, _ = mimetypes.guess_type(inp.filepath)
     lang = inp.language
+
     if mime and "pdf" in mime:
         text = _pdf_text_fast(inp.filepath)
         if not text or len(text.strip()) < 10:
-            text = _pdf_to_ocr_text(inp.filepath, lang)
+            ocr_layer_text = _pdf_to_ocr_text_via_ocrmypdf(inp.filepath, lang)
+            if ocr_layer_text and len(ocr_layer_text.strip()) >= 10:
+                text = ocr_layer_text
+            else:
+                text = _pdf_to_ocr_text_via_images(inp.filepath, lang)
     else:
-        text = _image_to_text(inp.filepath, lang)
-    return RawText(text=text, source_name=os.path.basename(inp.filepath), language=lang)
+        img = Image.open(inp.filepath)
+        text = _image_to_text_ocr(img, lang)
+
+    return RawText(text=text or "", source_name=os.path.basename(inp.filepath), language=lang)
 
 
-def pdf_to_images(pdf_path: str, dpi: int = 200) -> List[Image.Image]:
-    poppler_bin = os.getenv("POPPLER_PATH", None)
-
-    try:
-        images = convert_from_path(pdf_path, dpi=dpi, poppler_path=poppler_bin)
-        return images
-    except Exception as e:
-        error_msg = str(e)
-        if "PDFInfoNotInstalledError" in error_msg:
-            raise Exception(
-                "Error: Poppler not found!"
-            )
-        raise Exception(f"Error converting PDF to images: {error_msg}")
-
-
-def image_to_base64(image: Image) -> str:
-    """
-    Convert PIL Image to base64 string for LLM input
-    """
-    buffer = io.BytesIO()
+def _pil_to_base64_jpeg(image: Image.Image) -> str:
+    buf = io.BytesIO()
     if image.mode != "RGB":
         image = image.convert("RGB")
-    image.save(buffer, format="JPEG", quality=95)
-    img_bytes = buffer.getvalue()
-    return base64.b64encode(img_bytes).decode("utf-8")
-
-
-def image_to_text_with_llm(image: Image, vision_model, prompt: str = None) -> RawText:
-    """
-    Extract text from image using Vision LLM
-    """
-    try:
-        if prompt is None:
-            prompt = """Please extract all the text you can see in this image.
-            Maintain the original formatting as much as possible, including:
-            - Line breaks and paragraphs
-            - Lists and bullet points
-            - Tables (format as plain text tables)
-            - Any headers or titles
-
-            Only return the extracted text, no additional commentary."""
-
-        img_base64 = image_to_base64(image)
-
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"},
-                    },
-                ],
-            }
-        ]
-
-        response = vision_model.chat.completions.create(
-            model="gpt-4o", messages=messages, max_tokens=2048
-        )
-        return response.choices[0].message.content.strip()
-
-    except Exception as e:
-        raise Exception(f"Error extracting text with LLM: {str(e)}")
+    image.save(buf, format="JPEG", quality=95)
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
 def create_medical_extraction_prompt(language: Optional[str] = None) -> str:
-    """
-    Create a specialized prompt for extracting text from medical/blood test documents
-    """
     lang_instruction = f" in {language}" if language else ""
+    return f"""You are analyzing a medical document (blood test / lab report). Extract ALL visible text with high accuracy.
 
-    prompt = f"""You are analyzing a medical document, likely a blood test or lab report. Please extract ALL visible text from this image with high accuracy.
+Rules:
+- Extract every piece of text, including tables, headers, footers, labels.
+- Preserve formatting and table structure as plain text.
+- Be precise with numbers, decimal points, units, and ranges.
+- If something is unclear, mark it as [UNCLEAR: ...]
+- Return ONLY the extracted text. No explanations.
 
-IMPORTANT INSTRUCTIONS:
-1. Extract every piece of text you can see, including:
-   - Patient information (names, IDs, dates)
-   - Test names and categories
-   - Numerical values and units
-   - Reference ranges
-   - Doctor/lab information
-   - Headers, footers, and labels
-
-2. Maintain the original structure and formatting:
-   - Preserve line breaks and spacing
-   - Keep tables in tabular format
-   - Maintain the relationship between test names and values
-   - Include any special symbols or formatting
-
-3. Be extremely precise with:
-   - Numbers and decimal points
-   - Medical terminology
-   - Units of measurement
-   - Dates and times
-
-4. If any text is unclear or partially obscured, indicate this with [UNCLEAR: partial_text]
-
-5. Do NOT:
-   - Add interpretations or explanations
-   - Modify or "correct" any information
-   - Skip any visible text, even if it seems unimportant
-
-Extract the text{lang_instruction} maintaining maximum fidelity to the original document:"""
-
-
-    return prompt
+Extract the text{lang_instruction}:"""
 
 
 def _is_valid_extracted_text(text: str) -> bool:
     if not text or len(text.strip()) < 10:
         return False
 
-    text_lower = text.lower()
+    tl = text.lower()
     refusal_patterns = [
-        "i can't assist", "i cannot assist", "i'm unable to", "i am unable to",
-        "there is no text", "no text to extract", "cannot extract", "unable to extract",
-        "i don't see", "i do not see", "sorry, but", "as an ai",
+        "i can't assist",
+        "i cannot assist",
+        "i'm unable to",
+        "i am unable to",
+        "there is no text",
+        "no text to extract",
+        "cannot extract",
+        "unable to extract",
+        "i don't see",
+        "i do not see",
+        "sorry, but",
+        "as an ai",
     ]
-
-    for pattern in refusal_patterns:
-        if pattern in text_lower:
-            return False
+    if any(p in tl for p in refusal_patterns):
+        return False
 
     if len(text.strip()) < 50:
         has_numbers = any(c.isdigit() for c in text)
@@ -193,91 +141,52 @@ def _is_valid_extracted_text(text: str) -> bool:
     return True
 
 
-def _extract_text_from_image_llm(
-        image: Image.Image, prompt: str, max_retries: int = 3, model_config=None
-) -> str:
+def extract_text_with_llm(inp: ExtractTextInput, model_config: Optional[ModelConfig] = None) -> RawText:
     if model_config is None:
         model_config = get_model_config()
 
-    img_array = np.array(image)
-    img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-    retval, buffer = cv2.imencode(".jpg", img_bgr)
-    image_bytes = buffer.tobytes()
-    base64_image = base64.b64encode(image_bytes).decode("utf-8")
-
-    prompts = [
-        prompt,
-        "You are an OCR system. Return ONLY the raw text exactly as it appears.",
-        "Extract and return ALL text visible in this image. No commentary."
-    ]
-
-    client = model_config.get_openai_client()
-
-    for attempt in range(min(max_retries, len(prompts))):
-        try:
-            current_prompt = prompts[attempt]
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": current_prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
-                        },
-                    ],
-                }
-            ]
-
-            response = client.chat.completions.create(
-                model=model_config.model_name, messages=messages, max_tokens=4096
-            )
-
-            extracted_text = response.choices[0].message.content
-
-            if _is_valid_extracted_text(extracted_text):
-                return extracted_text
-
-        except Exception as e:
-            print(f"LLM extraction attempt {attempt + 1} failed: {e}")
-
-    return ""
-
-
-def _extract_text_from_image_ocr(image: Image.Image, lang: str | None) -> str:
-    try:
-        return pytesseract.image_to_string(image, lang=lang)
-    except Exception as e:
-        return f"[Error: OCR extraction failed: {e}]"
-
-
-def extract_text_with_llm(inp: ExtractTextInput, model_config=None) -> str:
-    if model_config is None:
-        model_config = get_model_config()
-
-    all_extracted_text = []
     mime, _ = mimetypes.guess_type(inp.filepath)
+    lang = inp.language
 
     if mime and "pdf" in mime:
-        images = pdf_to_images(inp.filepath)
+        images = _pdf_to_images(inp.filepath, dpi=250)
     else:
         images = [Image.open(inp.filepath)]
 
-    page_prompt = (
-        "Extract all text from the provided medical laboratory report page. "
-        "Redact PII with '[REDACTED]'. "
-        "Return only the text content."
-    )
+    prompt = create_medical_extraction_prompt(language=lang)
 
-    for i, image in enumerate(images):
-        extracted_text = _extract_text_from_image_llm(image, page_prompt, max_retries=3, model_config=model_config)
+    prompts = [
+        prompt,
+        "You are an OCR system. Return ONLY the raw text exactly as it appears. No commentary.",
+        "Extract and return ALL text visible in this image. No commentary.",
+    ]
 
-        if not extracted_text or not _is_valid_extracted_text(extracted_text):
-            extracted_text = _extract_text_from_image_ocr(image, inp.language)
+    parts: List[str] = []
+    for i, img in enumerate(images):
+        base64_image = _pil_to_base64_jpeg(img)
 
-        if extracted_text:
-            all_extracted_text.append(extracted_text)
-        else:
-            all_extracted_text.append(f"[Error: Could not extract text from page {i + 1}]")
+        extracted = ""
+        for attempt in range(min(3, len(prompts))):
+            try:
+                extracted = model_config.chat_vision_text(
+                    user_prompt=prompts[attempt],
+                    image_base64_jpeg=base64_image,
+                    temperature=0,
+                    max_tokens=4096,
+                )
+                if _is_valid_extracted_text(extracted):
+                    break
+            except Exception:
+                continue
 
-    return "\n".join(all_extracted_text)
+        if not extracted:
+            extracted = _image_to_text_ocr(img, lang)
+
+        extracted = (extracted or "").strip()
+        if not extracted:
+            extracted = f"[Error: Could not extract text from page {i + 1}]"
+
+        parts.append(extracted)
+
+    full_text = "\n\n".join(parts).strip()
+    return RawText(text=full_text, source_name=os.path.basename(inp.filepath), language=lang)
