@@ -217,7 +217,6 @@ def parse_to_json(mc: Minio, cfg: MinioConfig, doc_id: str, model_config=None) -
 
     json_key = put_json(mc, cfg.silver_bucket, doc_id, result_json, suffix="parsed")
 
-    # Update DB pointers
     set_json(doc_id, result_json, bucket=cfg.silver_bucket, key=json_key)
     set_editable_json_key(doc_id, editable_json_key=json_key)
     set_status(doc_id, "json_serialized")

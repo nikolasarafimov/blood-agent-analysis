@@ -1,16 +1,12 @@
-# -------- OS --------
 .DS_Store
 Thumbs.db
 
-# -------- IDEs --------
 .idea/
 .vscode/
 *.iml
 
-# PyCharm
 .idea/
 
-# -------- Python --------
 __pycache__/
 *.pyc
 *.pyo
@@ -20,7 +16,6 @@ venv/
 .env
 .env.*
 
-# -------- Node / React --------
 node_modules/
 dist/
 build/
@@ -29,9 +24,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# -------- Java / Spring --------
 target/
 *.log
 
-# -------- Misc --------
 *.sqlite3

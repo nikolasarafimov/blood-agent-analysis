@@ -67,7 +67,6 @@ def ingest_then_extract(
     if not fp.exists():
         raise FileNotFoundError(f"File not found: {filepath}")
 
-    # Decide whether to use LLM OCR (optional env toggle)
     if use_llm_ocr is None:
         use_llm_ocr = os.getenv("USE_LLM_OCR", "false").lower() == "true"
 

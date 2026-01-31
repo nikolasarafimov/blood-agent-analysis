@@ -213,7 +213,6 @@ async def get_doc_text(
             raise HTTPException(status_code=404, detail="no anonymized text")
         return {"type": type, "content": get_text_object(mc, cfg.silver_bucket, anonymized_key)}
 
-    # type == "json"
     if not json_key:
         raise HTTPException(status_code=404, detail="no json available")
     data = get_json(mc, cfg.silver_bucket, json_key)
@@ -226,7 +225,6 @@ async def save_doc_text(doc_id: str, body: SaveTextRequest):
     mc = client(cfg)
     _ = _require_record(doc_id)
 
-    # Save edited text to silver as user_* so it becomes editable source
     if body.type in ("extracted", "anonymized"):
         key = f"documents/{doc_id}/user_{body.type}.txt"
         data = (body.content or "").encode("utf-8")
