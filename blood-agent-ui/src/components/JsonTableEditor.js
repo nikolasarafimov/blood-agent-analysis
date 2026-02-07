@@ -11,11 +11,11 @@ import {
   Stack,
   Typography,
   CircularProgress,
-  Tooltip,
+  Tooltip
 } from "@mui/material";
 import SaveIcon from "@mui/icons-material/Save";
 
-export default function JsonTableEditor({ apiBase, docId, rows, setRows, onSaved }) {
+export default function JsonTableEditor({ apiBase, docId, rows, setRows, onSaved, onToast }) {
   const [savingRow, setSavingRow] = useState(null);
 
   const safeRows = useMemo(() => (Array.isArray(rows) ? rows : []), [rows]);
@@ -35,9 +35,9 @@ export default function JsonTableEditor({ apiBase, docId, rows, setRows, onSaved
       value: r.value ?? null,
       unit: r.unit ?? null,
       loinc_code: r.loinc_code ?? null,
-      reference_min: r.reference_min ?? null,
-      reference_max: r.reference_max ?? null,
       loinc_display: r.loinc_display ?? null,
+      reference_min: r.reference_min ?? null,
+      reference_max: r.reference_max ?? null
     };
 
     setSavingRow(idx);
@@ -45,7 +45,7 @@ export default function JsonTableEditor({ apiBase, docId, rows, setRows, onSaved
       const res = await fetch(`${apiBase}/docs/${docId}/rows/${idx}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(payload)
       });
 
       if (!res.ok) {
@@ -55,7 +55,7 @@ export default function JsonTableEditor({ apiBase, docId, rows, setRows, onSaved
 
       await onSaved?.();
     } catch (e) {
-      alert(`Row save failed: ${e.message}`);
+      onToast?.(`Row save failed: ${e.message}`, "error");
     } finally {
       setSavingRow(null);
     }
@@ -63,38 +63,37 @@ export default function JsonTableEditor({ apiBase, docId, rows, setRows, onSaved
 
   return (
     <Box sx={{ width: "100%" }}>
-      <Typography sx={{ fontSize: 12.5, color: "rgba(229,231,235,0.70)", mb: 1 }}>
-        Edit any cell and click <b>Save</b> on that row to persist it to the database.
+      <Typography sx={{ fontSize: 12.6, color: "rgba(229,231,235,0.72)", mb: 1 }}>
+        Edit any cell and click <b>Save</b> on that row.
       </Typography>
 
       <Box
         sx={{
           border: "1px solid rgba(148,163,184,0.14)",
-          borderRadius: "16px",
+          borderRadius: 2,
           overflow: "hidden",
-          bgcolor: "rgba(2,6,23,0.35)",
+          bgcolor: "rgba(2,6,23,0.35)"
         }}
       >
-        <Table size="small" sx={{ "& td, & th": { borderColor: "rgba(148,163,184,0.10)" } }}>
+        <Table size="small" stickyHeader sx={{ "& td, & th": { borderColor: "rgba(148,163,184,0.10)" } }}>
           <TableHead>
             <TableRow>
-              <TableCell sx={{ width: 64, fontWeight: 950, color: "rgba(229,231,235,0.9)" }}>#</TableCell>
-              <TableCell sx={{ fontWeight: 950, color: "rgba(229,231,235,0.9)" }}>Parameter</TableCell>
-              <TableCell sx={{ width: 170, fontWeight: 950, color: "rgba(229,231,235,0.9)" }}>Value</TableCell>
-              <TableCell sx={{ width: 120, fontWeight: 950, color: "rgba(229,231,235,0.9)" }}>Unit</TableCell>
-              <TableCell sx={{ width: 140, fontWeight: 950, color: "rgba(229,231,235,0.9)" }}>LOINC</TableCell>
-              <TableCell sx={{ width: 140, fontWeight: 950, color: "rgba(229,231,235,0.9)" }}>Ref min</TableCell>
-              <TableCell sx={{ width: 140, fontWeight: 950, color: "rgba(229,231,235,0.9)" }}>Ref max</TableCell>
-              <TableCell sx={{ width: 130 }} />
+              <TableCell sx={{ width: 56, fontWeight: 950, color: "rgba(229,231,235,0.9)", bgcolor: "rgba(11,16,32,0.85)" }}>#</TableCell>
+              <TableCell sx={{ fontWeight: 950, color: "rgba(229,231,235,0.9)", bgcolor: "rgba(11,16,32,0.85)" }}>Parameter</TableCell>
+              <TableCell sx={{ width: 160, fontWeight: 950, color: "rgba(229,231,235,0.9)", bgcolor: "rgba(11,16,32,0.85)" }}>Value</TableCell>
+              <TableCell sx={{ width: 120, fontWeight: 950, color: "rgba(229,231,235,0.9)", bgcolor: "rgba(11,16,32,0.85)" }}>Unit</TableCell>
+              <TableCell sx={{ width: 140, fontWeight: 950, color: "rgba(229,231,235,0.9)", bgcolor: "rgba(11,16,32,0.85)" }}>LOINC</TableCell>
+              <TableCell sx={{ width: 180, fontWeight: 950, color: "rgba(229,231,235,0.9)", bgcolor: "rgba(11,16,32,0.85)" }}>LOINC display</TableCell>
+              <TableCell sx={{ width: 120, fontWeight: 950, color: "rgba(229,231,235,0.9)", bgcolor: "rgba(11,16,32,0.85)" }}>Ref min</TableCell>
+              <TableCell sx={{ width: 120, fontWeight: 950, color: "rgba(229,231,235,0.9)", bgcolor: "rgba(11,16,32,0.85)" }}>Ref max</TableCell>
+              <TableCell sx={{ width: 120, bgcolor: "rgba(11,16,32,0.85)" }} />
             </TableRow>
           </TableHead>
 
           <TableBody>
             {safeRows.map((r, idx) => (
               <TableRow key={idx} hover>
-                <TableCell sx={{ color: "rgba(229,231,235,0.75)", fontFamily: "ui-monospace, Menlo, monospace" }}>
-                  {idx}
-                </TableCell>
+                <TableCell sx={{ color: "rgba(229,231,235,0.72)", fontFamily: "ui-monospace, Menlo, monospace" }}>{idx}</TableCell>
 
                 <TableCell>
                   <TextField
@@ -106,10 +105,10 @@ export default function JsonTableEditor({ apiBase, docId, rows, setRows, onSaved
                     sx={{
                       "& .MuiOutlinedInput-root": {
                         bgcolor: "rgba(255,255,255,0.03)",
-                        borderRadius: "12px",
-                        "& fieldset": { borderColor: "rgba(148,163,184,0.18)" },
+                        borderRadius: 2,
+                        "& fieldset": { borderColor: "rgba(148,163,184,0.18)" }
                       },
-                      input: { color: "rgba(229,231,235,0.90)" },
+                      input: { color: "rgba(229,231,235,0.90)" }
                     }}
                   />
                 </TableCell>
@@ -124,10 +123,10 @@ export default function JsonTableEditor({ apiBase, docId, rows, setRows, onSaved
                     sx={{
                       "& .MuiOutlinedInput-root": {
                         bgcolor: "rgba(255,255,255,0.03)",
-                        borderRadius: "12px",
-                        "& fieldset": { borderColor: "rgba(148,163,184,0.18)" },
+                        borderRadius: 2,
+                        "& fieldset": { borderColor: "rgba(148,163,184,0.18)" }
                       },
-                      input: { color: "rgba(229,231,235,0.90)" },
+                      input: { color: "rgba(229,231,235,0.90)" }
                     }}
                   />
                 </TableCell>
@@ -142,10 +141,10 @@ export default function JsonTableEditor({ apiBase, docId, rows, setRows, onSaved
                     sx={{
                       "& .MuiOutlinedInput-root": {
                         bgcolor: "rgba(255,255,255,0.03)",
-                        borderRadius: "12px",
-                        "& fieldset": { borderColor: "rgba(148,163,184,0.18)" },
+                        borderRadius: 2,
+                        "& fieldset": { borderColor: "rgba(148,163,184,0.18)" }
                       },
-                      input: { color: "rgba(229,231,235,0.90)" },
+                      input: { color: "rgba(229,231,235,0.90)" }
                     }}
                   />
                 </TableCell>
@@ -160,10 +159,28 @@ export default function JsonTableEditor({ apiBase, docId, rows, setRows, onSaved
                     sx={{
                       "& .MuiOutlinedInput-root": {
                         bgcolor: "rgba(255,255,255,0.03)",
-                        borderRadius: "12px",
-                        "& fieldset": { borderColor: "rgba(148,163,184,0.18)" },
+                        borderRadius: 2,
+                        "& fieldset": { borderColor: "rgba(148,163,184,0.18)" }
                       },
-                      input: { color: "rgba(229,231,235,0.90)" },
+                      input: { color: "rgba(229,231,235,0.90)" }
+                    }}
+                  />
+                </TableCell>
+
+                <TableCell>
+                  <TextField
+                    value={r.loinc_display ?? ""}
+                    onChange={(e) => onCellChange(idx, "loinc_display", e.target.value)}
+                    size="small"
+                    fullWidth
+                    placeholder="e.g. Hemoglobin [Mass/volume] in Blood"
+                    sx={{
+                      "& .MuiOutlinedInput-root": {
+                        bgcolor: "rgba(255,255,255,0.03)",
+                        borderRadius: 2,
+                        "& fieldset": { borderColor: "rgba(148,163,184,0.18)" }
+                      },
+                      input: { color: "rgba(229,231,235,0.90)" }
                     }}
                   />
                 </TableCell>
@@ -178,10 +195,10 @@ export default function JsonTableEditor({ apiBase, docId, rows, setRows, onSaved
                     sx={{
                       "& .MuiOutlinedInput-root": {
                         bgcolor: "rgba(255,255,255,0.03)",
-                        borderRadius: "12px",
-                        "& fieldset": { borderColor: "rgba(148,163,184,0.18)" },
+                        borderRadius: 2,
+                        "& fieldset": { borderColor: "rgba(148,163,184,0.18)" }
                       },
-                      input: { color: "rgba(229,231,235,0.90)" },
+                      input: { color: "rgba(229,231,235,0.90)" }
                     }}
                   />
                 </TableCell>
@@ -196,10 +213,10 @@ export default function JsonTableEditor({ apiBase, docId, rows, setRows, onSaved
                     sx={{
                       "& .MuiOutlinedInput-root": {
                         bgcolor: "rgba(255,255,255,0.03)",
-                        borderRadius: "12px",
-                        "& fieldset": { borderColor: "rgba(148,163,184,0.18)" },
+                        borderRadius: 2,
+                        "& fieldset": { borderColor: "rgba(148,163,184,0.18)" }
                       },
-                      input: { color: "rgba(229,231,235,0.90)" },
+                      input: { color: "rgba(229,231,235,0.90)" }
                     }}
                   />
                 </TableCell>
@@ -215,12 +232,11 @@ export default function JsonTableEditor({ apiBase, docId, rows, setRows, onSaved
                           variant="contained"
                           startIcon={savingRow === idx ? <CircularProgress size={14} sx={{ color: "white" }} /> : <SaveIcon />}
                           sx={{
-                            borderRadius: "12px",
+                            borderRadius: 2,
                             fontWeight: 950,
-                            backgroundImage:
-                              "linear-gradient(135deg, rgba(124,92,255,0.95), rgba(124,92,255,0.55))",
+                            backgroundImage: "linear-gradient(135deg, rgba(124,92,255,0.95), rgba(124,92,255,0.55))",
                             border: "1px solid rgba(124,92,255,0.55)",
-                            boxShadow: "0 18px 55px rgba(124,92,255,0.18)",
+                            boxShadow: "0 18px 55px rgba(124,92,255,0.18)"
                           }}
                         >
                           {savingRow === idx ? "Saving" : "Save"}
@@ -234,7 +250,7 @@ export default function JsonTableEditor({ apiBase, docId, rows, setRows, onSaved
 
             {safeRows.length === 0 && (
               <TableRow>
-                <TableCell colSpan={8} sx={{ py: 2 }}>
+                <TableCell colSpan={9} sx={{ py: 2 }}>
                   <Typography sx={{ fontSize: 12.5, color: "rgba(229,231,235,0.65)" }}>
                     No rows yet. Click <b>Regenerate</b> to populate the table from JSON.
                   </Typography>

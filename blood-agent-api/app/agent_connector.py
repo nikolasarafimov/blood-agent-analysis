@@ -41,9 +41,7 @@ def _run_pipeline_sync(prompt: str, file_bytes: bytes, filename: str, language: 
             pass
 
         anonymize_and_store_by_doc_id(mc, cfg, doc_id, model_config=model_config)
-
         parse_to_json(mc, cfg, doc_id, model_config=model_config)
-
         validate_and_enrich_loinc_codes(mc, cfg, doc_id, model_config=model_config)
 
         rec = get_record(doc_id) or {}
@@ -59,13 +57,13 @@ def _run_pipeline_sync(prompt: str, file_bytes: bytes, filename: str, language: 
             os.remove(tmp_filepath)
 
 
-async def run_pipeline_with_file(prompt: str, file_bytes: bytes, filename: str) -> Dict[str, Any]:
-    return await run_in_threadpool(_run_pipeline_sync, prompt, file_bytes, filename)
+async def run_pipeline_with_file(prompt: str, file_bytes: bytes, filename: str, language: str = "mkd+eng") -> Dict[str, Any]:
+    return await run_in_threadpool(_run_pipeline_sync, prompt, file_bytes, filename, language)
 
 
-async def run_pipeline_with_files(prompt: str, files: List[Tuple[bytes, str]]) -> List[Dict[str, Any]]:
+async def run_pipeline_with_files(prompt: str, files: List[Tuple[bytes, str]], language: str = "mkd+eng") -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     for file_bytes, filename in files:
-        res = await run_pipeline_with_file(prompt, file_bytes, filename)
+        res = await run_pipeline_with_file(prompt, file_bytes, filename, language)
         results.append(res)
     return results

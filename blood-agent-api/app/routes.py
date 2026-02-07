@@ -9,7 +9,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Request
 from fastapi.responses import StreamingResponse
 from minio.error import S3Error
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from .agent_connector import run_pipeline_with_files
 from db.sqlite_db import (
@@ -33,10 +33,6 @@ router = APIRouter()
 
 
 def _file_url(request: Request, bucket: str, key: Optional[str]) -> Optional[str]:
-    """
-    Build an absolute URL to a stored object served via /files/{bucket}/{key}.
-    Uses request.base_url so it works behind Docker/reverse proxies.
-    """
     if not key:
         return None
     base = str(request.base_url).rstrip("/")
@@ -67,12 +63,15 @@ def _require_record(doc_id: str) -> dict:
 
 
 def _max_upload_bytes() -> int:
-    """
-    Basic guardrail against massive uploads.
-    Override with env MAX_UPLOAD_MB (default 20MB).
-    """
-    max_mb = int(os.getenv("MAX_UPLOAD_MB", "20"))
+    raw = os.getenv("MAX_UPLOAD_MB", "20")
+    try:
+        max_mb = int(raw)
+    except Exception:
+        max_mb = 20
+    if max_mb <= 0:
+        max_mb = 20
     return max_mb * 1024 * 1024
+
 
 class SaveTextRequest(BaseModel):
     type: Literal["extracted", "anonymized", "json"]
@@ -103,6 +102,7 @@ async def run_agent_endpoint(
     request: Request,
     files: List[UploadFile] = File(...),
     prompt: str = Form("Process these documents"),
+    language: str = Form("mkd+eng"),
 ):
     max_bytes = _max_upload_bytes()
 
@@ -113,12 +113,12 @@ async def run_agent_endpoint(
         if not content:
             raise HTTPException(status_code=400, detail=f"empty file: {name}")
         if len(content) > max_bytes:
-            max_mb = int(os.getenv("MAX_UPLOAD_MB", "20"))
+            max_mb = int(os.getenv("MAX_UPLOAD_MB", "20") or "20")
             raise HTTPException(status_code=413, detail=f"file too large: {name} (max {max_mb}MB)")
         file_payloads.append((content, name))
 
     try:
-        results = await run_pipeline_with_files(prompt, file_payloads)
+        results = await run_pipeline_with_files(prompt, file_payloads, language=language)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"pipeline failed: {e}")
 
@@ -132,7 +132,7 @@ async def run_agent_endpoint(
             continue
 
         rec = get_record(doc_id) or {}
-        preview_key = rec.get("preview_image_key")  # get_record() aliases preview_key -> preview_image_key
+        preview_key = rec.get("preview_image_key")
         original_key = rec.get("key") or rec.get("original_key")
 
         out.append(
@@ -169,7 +169,6 @@ async def get_doc(request: Request, doc_id: str):
 @router.get("/files/{bucket}/{key:path}", summary="Serve file from MinIO")
 async def serve_file(bucket: str, key: str):
     cfg = MinioConfig()
-
     allowed = {cfg.bronze_bucket, cfg.silver_bucket}
     if bucket not in allowed:
         raise HTTPException(status_code=404, detail="bucket not found")
@@ -181,13 +180,17 @@ async def serve_file(bucket: str, key: str):
     except S3Error:
         raise HTTPException(status_code=404, detail="file not found")
 
-    try:
-        data = obj.read()
-    finally:
-        obj.close()
-        obj.release_conn()
+    def iterator():
+        try:
+            for chunk in obj.stream(1024 * 64):
+                yield chunk
+        finally:
+            try:
+                obj.close()
+            finally:
+                obj.release_conn()
 
-    return StreamingResponse(io.BytesIO(data), media_type=_guess_content_type(key))
+    return StreamingResponse(iterator(), media_type=_guess_content_type(key))
 
 
 @router.get("/docs/{doc_id}/text", summary="Get editable text/json")
@@ -200,8 +203,8 @@ async def get_doc_text(
     rec = _require_record(doc_id)
 
     extracted_key = rec.get("text_key")
-    anonymized_key = rec.get("editable_text_key") or rec.get("anonymized_txt")
-    json_key = rec.get("editable_json_key") or rec.get("json_key")
+    anonymized_key = rec.get("editable_text_key") or rec.get("anonymized_txt") or rec.get("anonymized_key")
+    json_key = rec.get("editable_json_key") or rec.get("json_key") or rec.get("loinc_key")
 
     if type == "extracted":
         if not extracted_key:
@@ -268,7 +271,7 @@ async def regenerate_json(doc_id: str):
     mc = client(cfg)
     rec = _require_record(doc_id)
 
-    text_key = rec.get("editable_text_key") or rec.get("anonymized_txt")
+    text_key = rec.get("editable_text_key") or rec.get("anonymized_txt") or rec.get("anonymized_key")
     if text_key:
         text = get_text_object(mc, cfg.silver_bucket, text_key)
     else:
