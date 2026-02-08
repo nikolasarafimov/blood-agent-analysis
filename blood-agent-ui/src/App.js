@@ -18,7 +18,10 @@ import {
   Menu,
   MenuItem,
   ListItemIcon,
-  ListItemText
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions
 } from "@mui/material";
 import { ThemeProvider, createTheme } from "@mui/material/styles";
 
@@ -34,11 +37,14 @@ import GridViewRoundedIcon from "@mui/icons-material/GridViewRounded";
 import ChatRoundedIcon from "@mui/icons-material/ChatRounded";
 import PersonRoundedIcon from "@mui/icons-material/PersonRounded";
 import MoreVertRoundedIcon from "@mui/icons-material/MoreVertRounded";
+import EditRoundedIcon from "@mui/icons-material/EditRounded";
+import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
 
 import { useDropzone } from "react-dropzone";
 import DocumentCard from "./components/DocumentCard";
 
 const API_BASE = (process.env.REACT_APP_API_URL || "http://localhost:8000").replace(/\/$/, "");
+const MAX_FILES = 5;
 
 const theme = createTheme({
   palette: {
@@ -98,30 +104,43 @@ function StatusPill({ loading }) {
   const bg = loading ? "rgba(124,92,255,0.12)" : "rgba(34,197,94,0.12)";
   const fg = loading ? "rgba(124,92,255,0.95)" : "rgba(34,197,94,0.95)";
   const br = loading ? "rgba(124,92,255,0.25)" : "rgba(34,197,94,0.25)";
-  return (
-    <Chip size="small" label={label} sx={{ bgcolor: bg, color: fg, border: `1px solid ${br}`, fontWeight: 950 }} />
-  );
+  return <Chip size="small" label={label} sx={{ bgcolor: bg, color: fg, border: `1px solid ${br}`, fontWeight: 950 }} />;
 }
 
 function FileRow({ names = [] }) {
   if (!names.length) return null;
   return (
-    <Stack direction="row" spacing={0.8} flexWrap="wrap" useFlexGap sx={{ mt: 0.7 }}>
+    <Stack spacing={0.7} sx={{ mt: 1.0 }}>
       {names.map((n) => (
-        <Chip
+        <Box
           key={n}
-          size="small"
-          icon={<UploadFileRoundedIcon />}
-          label={n}
           sx={{
-            height: 24,
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            px: 1.1,
+            py: 0.75,
+            borderRadius: 2,
             bgcolor: "rgba(255,255,255,0.05)",
-            color: "rgba(237,242,250,0.84)",
             border: "1px solid rgba(148,163,184,0.14)",
-            fontWeight: 900,
-            "& .MuiChip-label": { maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis" }
+            maxWidth: 560
           }}
-        />
+        >
+          <UploadFileRoundedIcon sx={{ fontSize: 18, color: "rgba(237,242,250,0.72)" }} />
+          <Typography
+            sx={{
+              fontSize: 12.2,
+              fontWeight: 900,
+              color: "rgba(237,242,250,0.84)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap"
+            }}
+            title={n}
+          >
+            {n}
+          </Typography>
+        </Box>
       ))}
     </Stack>
   );
@@ -175,10 +194,41 @@ function Bubble({ role, children }) {
   );
 }
 
-function SessionCard({ s, active, onClick, onOpenMenu }) {
+function SessionCard({ s, active, onClick, onRename, onDelete }) {
   const title = s?.title || "Chat";
   const subtitle = s?.subtitle || "No results yet";
   const docCount = Array.isArray(s?.docs) ? s.docs.length : 0;
+
+  const [menuAnchor, setMenuAnchor] = useState(null);
+  const menuOpen = Boolean(menuAnchor);
+
+  const openMenu = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenuAnchor(e.currentTarget);
+  };
+
+  const closeMenu = (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    setMenuAnchor(null);
+  };
+
+  const handleRename = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    closeMenu(e);
+    onRename?.(s);
+  };
+
+  const handleDelete = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    closeMenu(e);
+    onDelete?.(s);
+  };
 
   return (
     <Box
@@ -202,7 +252,8 @@ function SessionCard({ s, active, onClick, onOpenMenu }) {
             placeItems: "center",
             bgcolor: "rgba(2,6,23,0.55)",
             border: "1px solid rgba(148,163,184,0.14)",
-            overflow: "hidden"
+            overflow: "hidden",
+            flex: "0 0 auto"
           }}
         >
           {s?.coverUrl ? (
@@ -221,7 +272,7 @@ function SessionCard({ s, active, onClick, onOpenMenu }) {
           </Typography>
         </Box>
 
-        <Stack spacing={0.7} alignItems="flex-end">
+        <Stack direction="row" spacing={0.8} alignItems="center" sx={{ flex: "0 0 auto" }}>
           <Chip
             size="small"
             label={`${docCount} docs`}
@@ -233,28 +284,79 @@ function SessionCard({ s, active, onClick, onOpenMenu }) {
               border: "1px solid rgba(148,163,184,0.14)"
             }}
           />
-        </Stack>
 
-        <Tooltip title="More">
           <IconButton
-            size="small"
-            onClick={(e) => {
-              // IMPORTANT: prevent selecting the chat when clicking the menu button
-              e.preventDefault();
-              e.stopPropagation();
-              onOpenMenu?.(e, s.id);
-            }}
+            onClick={openMenu}
             sx={{
-              ml: 0.4,
-              color: "rgba(237,242,250,0.72)",
+              width: 34,
+              height: 34,
+              color: "rgba(237,242,250,0.78)",
               bgcolor: "rgba(255,255,255,0.04)",
               border: "1px solid rgba(148,163,184,0.14)",
+              borderRadius: 2.5,
               "&:hover": { bgcolor: "rgba(255,255,255,0.08)" }
             }}
           >
             <MoreVertRoundedIcon fontSize="small" />
           </IconButton>
-        </Tooltip>
+
+          <Menu
+            anchorEl={menuAnchor}
+            open={menuOpen}
+            onClose={closeMenu}
+            anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+            transformOrigin={{ vertical: "top", horizontal: "right" }}
+            PaperProps={{
+              sx: {
+                ...glass,
+                minWidth: 160,
+                borderRadius: 1.5,
+                p: 0.25,
+                background: "rgba(10, 14, 28, 0.92)",
+                border: "1px solid rgba(148,163,184,0.16)",
+                boxShadow: "0 18px 55px rgba(0,0,0,0.60)",
+                backdropFilter: "blur(16px)"
+              }
+            }}
+          >
+            <MenuItem
+              onClick={handleRename}
+              sx={{
+                borderRadius: 1.5,
+                px: 1.0,
+                py: 0.6,
+                fontWeight: 900,
+                fontSize: 12.5,
+                minHeight: 34,
+                "&:hover": { bgcolor: "rgba(255,255,255,0.06)" }
+              }}
+            >
+              <ListItemIcon sx={{ minWidth: 30, color: "rgba(237,242,250,0.70)" }}>
+                <EditRoundedIcon fontSize="small" />
+              </ListItemIcon>
+                Rename
+            </MenuItem>
+
+            <MenuItem
+              onClick={handleDelete}
+              sx={{
+                borderRadius: 1.5,
+                px: 1.0,
+                py: 0.6,
+                fontWeight: 900,
+                fontSize: 12.5,
+                minHeight: 34,
+                color: "rgba(239,68,68,0.95)",
+                "&:hover": { bgcolor: "rgba(239,68,68,0.10)" }
+              }}
+            >
+              <ListItemIcon sx={{ minWidth: 30, color: "rgba(239,68,68,0.95)" }}>
+                <DeleteRoundedIcon fontSize="small" />
+              </ListItemIcon>
+              Delete
+            </MenuItem>
+          </Menu>
+        </Stack>
       </Stack>
     </Box>
   );
@@ -271,14 +373,7 @@ function Toast({ open, message, type, onClose }) {
       : { bg: "rgba(255,255,255,0.06)", fg: "rgba(237,242,250,0.90)", br: "rgba(148,163,184,0.16)" };
 
   return (
-    <Box
-      sx={{
-        position: "fixed",
-        right: 18,
-        bottom: 18,
-        zIndex: 2000
-      }}
-    >
+    <Box sx={{ position: "fixed", right: 18, bottom: 18, zIndex: 2000 }}>
       <Paper
         sx={{
           ...glass,
@@ -302,6 +397,10 @@ export default function App() {
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
 
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameSessionId, setRenameSessionId] = useState(null);
+  const [renameValue, setRenameValue] = useState("");
+
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(null);
 
@@ -313,10 +412,6 @@ export default function App() {
   const [prompt, setPrompt] = useState("");
 
   const [toast, setToast] = useState({ open: false, message: "", type: "info" });
-
-  // --- per-chat menu state (⋮)
-  const [chatMenu, setChatMenu] = useState({ anchorEl: null, sessionId: null });
-  const chatMenuOpen = Boolean(chatMenu.anchorEl);
 
   const scrollRef = useRef(null);
 
@@ -333,6 +428,7 @@ export default function App() {
     window.clearTimeout(showToast._t);
     showToast._t = window.setTimeout(() => setToast((t) => ({ ...t, open: false })), 2800);
   }, []);
+
   useEffect(() => {
     return () => {
       if (showToast._t) window.clearTimeout(showToast._t);
@@ -352,18 +448,17 @@ export default function App() {
       {
         id: "m_welcome",
         role: "assistant",
-        text: "Attach a PDF/image to begin. Then write something and press Run (or Enter)."
+        text: `Attach up to ${MAX_FILES} PDF/image files to begin. Then write something and press Run (or Enter).`
       }
     ];
     if (!activeSession) return base;
     return Array.isArray(activeSession.messages) && activeSession.messages.length ? activeSession.messages : base;
   }, [activeSession]);
 
-  const selectedDocId = useMemo(() => activeSession?.selectedDocId || null, [activeSession]);
-  const selectedDoc = useMemo(() => {
-    if (!activeSession || !selectedDocId) return null;
-    return (activeSession.docs || []).find((d) => d.doc_id === selectedDocId) || null;
-  }, [activeSession, selectedDocId]);
+  const sessionDocs = useMemo(() => {
+    const docs = activeSession?.docs;
+    return Array.isArray(docs) ? docs : [];
+  }, [activeSession]);
 
   const updateSession = useCallback((sessionId, updater) => {
     setSessions((prev) =>
@@ -414,7 +509,6 @@ export default function App() {
       status: "idle",
       messages: [],
       docs: [],
-      selectedDocId: null,
       coverUrl: ""
     };
     setSessions((prev) => [session, ...prev]);
@@ -427,19 +521,80 @@ export default function App() {
     [activeSessionId, sessions]
   );
 
-  const addFiles = useCallback((incoming) => {
-    const arr = Array.from(incoming || []);
-    if (!arr.length) return;
-    setFiles((prev) => {
-      const seen = new Set(prev.map((f) => `${f.name}_${f.size}`));
-      const next = [...prev];
-      for (const f of arr) {
-        const k = `${f.name}_${f.size}`;
-        if (!seen.has(k)) next.push(f);
-      }
-      return next;
-    });
+  const addFiles = useCallback(
+    (incoming) => {
+      const arr = Array.from(incoming || []);
+      if (!arr.length) return;
+
+      setFiles((prev) => {
+        const seen = new Set(prev.map((f) => `${f.name}_${f.size}`));
+        const next = [...prev];
+
+        for (const f of arr) {
+          const k = `${f.name}_${f.size}`;
+          if (seen.has(k)) continue;
+          next.push(f);
+          seen.add(k);
+        }
+
+        if (next.length > MAX_FILES) {
+          const allowed = next.slice(0, MAX_FILES);
+          showToast(`Maximum ${MAX_FILES} files allowed. Extra files were not added.`, "error");
+          return allowed;
+        }
+
+        return next;
+      });
+    },
+    [showToast]
+  );
+
+  const openRename = useCallback((session) => {
+    if (!session?.id) return;
+    setRenameSessionId(session.id);
+    setRenameValue(session.title || "Chat");
+    setRenameOpen(true);
   }, []);
+
+  const closeRename = useCallback(() => {
+    setRenameOpen(false);
+    setRenameSessionId(null);
+    setRenameValue("");
+  }, []);
+
+  const confirmRename = useCallback(() => {
+    const nextTitle = (renameValue || "").trim();
+    if (!renameSessionId) return closeRename();
+    if (!nextTitle) return;
+
+    setSessions((prev) => prev.map((s) => (s.id === renameSessionId ? { ...s, title: nextTitle } : s)));
+    closeRename();
+  }, [closeRename, renameSessionId, renameValue]);
+
+  const deleteSession = useCallback(
+    (session) => {
+      const sid = session?.id;
+      if (!sid) return;
+
+      setSessions((prev) => {
+        const remaining = prev.filter((s) => s.id !== sid);
+
+        if (activeSessionId === sid) {
+          const nextId = remaining[0]?.id || null;
+          setActiveSessionId(nextId);
+
+          if (!nextId) {
+            setView("chat");
+            setFiles([]);
+            setPrompt("");
+          }
+        }
+
+        return remaining;
+      });
+    },
+    [activeSessionId]
+  );
 
   const removeFile = useCallback((name) => setFiles((prev) => prev.filter((f) => f.name !== name)), []);
   const clearFiles = useCallback(() => setFiles([]), []);
@@ -471,14 +626,19 @@ export default function App() {
 
   const run = useCallback(async () => {
     if (!canRun) {
-      if (!files.length) showToast("Attach at least 1 file.", "error");
+      if (!files.length) showToast(`Attach 1–${MAX_FILES} file(s) first.`, "error");
+      return;
+    }
+
+    if (files.length > MAX_FILES) {
+      showToast(`Maximum ${MAX_FILES} files allowed.`, "error");
       return;
     }
 
     const sid = ensureSessionForSend();
 
     const rawPrompt = (prompt || "").trim();
-    const filesToSend = files.slice();
+    const filesToSend = files.slice(0, MAX_FILES);
     const fileNames = filesToSend.map((f) => f.name);
     const promptToSend = rawPrompt || "Process the attached document(s).";
 
@@ -504,35 +664,42 @@ export default function App() {
 
       const data = await res.json();
       const created = Array.isArray(data) ? data : [];
-      const firstOk = created.find((d) => d && d.doc_id);
+      const okDocs = created.filter((d) => d && d.doc_id);
+      const failed = created.filter((d) => d && !d.doc_id);
 
-      const summary = created
-        .slice(0, 6)
+      const summary = okDocs
+        .slice(0, 8)
         .map((d) => {
           const name = d?.filename ? ` (${d.filename})` : "";
-          return `• ${d.doc_id}${name} — ${d.status || "showing"}`;
+          return `• ${d.doc_id}${name} — ${d.status || "ready"}`;
         })
         .join("\n");
+
+      const failedSummary = failed.length
+        ? `\n\nFailed:\n${failed
+            .slice(0, 6)
+            .map((d, i) => `• File #${i + 1} — ${d?.status || "error"}`)
+            .join("\n")}`
+        : "";
 
       replaceMessage(
         sid,
         pendingId,
-        created.length
-          ? `Done.\n\nCreated documents:\n${summary}\n\nOpen Workspace to review the preview, JSON, and rows.`
-          : "Done, but no documents were returned."
+        okDocs.length
+          ? `Done.\n\nCreated documents:\n${summary}${failedSummary}\n\nOpen Workspace to review previews, JSON, and rows.`
+          : `Done, but no documents were returned.${failedSummary}`
       );
 
       updateSession(sid, (s) => {
-        const docs = [...(created || []), ...(s.docs || [])];
-        const coverUrl = firstOk?.preview_url || s.coverUrl || "";
-        const title = firstOk?.filename ? firstOk.filename : s.title || "Chat";
-        const subtitle = created.length ? `${created.length} document(s) processed` : s.subtitle || "No results yet";
-        const status = (firstOk?.status || s.status || "idle").toLowerCase();
-        const selectedDocIdNext = firstOk?.doc_id ? firstOk.doc_id : s.selectedDocId;
-        return { ...s, docs, coverUrl, title, subtitle, status, selectedDocId: selectedDocIdNext };
+        const docs = [...okDocs, ...(s.docs || [])];
+        const coverUrl = okDocs[0]?.preview_url || s.coverUrl || "";
+        const title = okDocs[0]?.filename ? okDocs[0].filename : s.title || "Chat";
+        const subtitle = okDocs.length ? `${okDocs.length} document(s) processed` : s.subtitle || "No results yet";
+        const status = (okDocs[0]?.status || s.status || "idle").toLowerCase();
+        return { ...s, docs, coverUrl, title, subtitle, status };
       });
 
-      if (firstOk?.doc_id) setView("workspace");
+      if (okDocs.length) setView("workspace");
       showToast("Run complete.", "success");
     } catch (e) {
       replaceMessage(sid, pendingId, `Error: ${e.message}`);
@@ -550,20 +717,17 @@ export default function App() {
 
       updateSession(activeSessionId, (s) => {
         const nextDocs = (s.docs || []).filter((d) => d.doc_id !== docId);
-        const nextSelected = s.selectedDocId === docId ? nextDocs[0]?.doc_id || null : s.selectedDocId;
         const coverUrl = nextDocs[0]?.preview_url || "";
         const subtitle = nextDocs.length ? `${nextDocs.length} document(s) processed` : "No results yet";
         const status = nextDocs[0]?.status || (nextDocs.length ? s.status : "idle");
-        return { ...s, docs: nextDocs, selectedDocId: nextSelected, coverUrl, subtitle, status };
+        return { ...s, docs: nextDocs, coverUrl, subtitle, status };
       });
 
-      setView((v) => (v === "workspace" ? "chat" : v));
-      showToast("Document removed from session.", "success");
+      showToast("Document deleted.", "success");
     },
     [activeSessionId, showToast, updateSession]
   );
 
-  // ---- Sidebar resize
   const startResize = useCallback(
     (e) => {
       if (!sidebarExpanded) return;
@@ -602,31 +766,6 @@ export default function App() {
     setSidebarExpanded(false);
     setIsResizing(false);
   }, []);
-
-  // ---- Chat (⋮) menu handlers
-  const openChatMenu = useCallback((e, sessionId) => {
-    setChatMenu({ anchorEl: e.currentTarget, sessionId });
-  }, []);
-
-  const closeChatMenu = useCallback(() => {
-    setChatMenu({ anchorEl: null, sessionId: null });
-  }, []);
-
-  const deleteSession = useCallback(
-    (sessionId) => {
-      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-
-      // If deleting the active one, clear selection and go back to chat
-      setActiveSessionId((prevActive) => {
-        if (prevActive === sessionId) return null;
-        return prevActive;
-      });
-
-      setView("chat");
-      showToast("Chat deleted.", "success");
-    },
-    [showToast]
-  );
 
   const SidebarExpanded = (
     <Box
@@ -741,12 +880,13 @@ export default function App() {
                 key={s.id}
                 s={s}
                 active={s.id === activeSessionId}
-                onOpenMenu={openChatMenu}
                 onClick={() => {
                   setActiveSessionId(s.id);
                   setView("chat");
                   setSidebarMobileOpen(false);
                 }}
+                onRename={openRename}
+                onDelete={deleteSession}
               />
             ))}
           </Stack>
@@ -785,43 +925,6 @@ export default function App() {
           }
         }}
       />
-
-      {/* Chat menu (⋮) */}
-      <Menu
-        anchorEl={chatMenu.anchorEl}
-        open={chatMenuOpen}
-        onClose={closeChatMenu}
-        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-        transformOrigin={{ vertical: "top", horizontal: "right" }}
-        PaperProps={{
-          sx: {
-            ...glass,
-            borderRadius: 2,
-            p: 0.4,
-            minWidth: 180
-          }
-        }}
-      >
-        <MenuItem
-          onClick={() => {
-            const sid = chatMenu.sessionId;
-            closeChatMenu();
-            if (sid) deleteSession(sid);
-          }}
-          sx={{
-            borderRadius: 1.5,
-            "&:hover": { bgcolor: "rgba(239,68,68,0.10)" }
-          }}
-        >
-          <ListItemIcon>
-            <DeleteOutlineRoundedIcon fontSize="small" sx={{ color: "rgba(239,68,68,0.92)" }} />
-          </ListItemIcon>
-          <ListItemText
-            primary="Delete chat"
-            primaryTypographyProps={{ fontWeight: 950, sx: { color: "rgba(237,242,250,0.92)" } }}
-          />
-        </MenuItem>
-      </Menu>
     </Box>
   );
 
@@ -1065,7 +1168,7 @@ export default function App() {
                 <Button
                   onClick={() => setView("workspace")}
                   startIcon={<GridViewRoundedIcon />}
-                  disabled={!selectedDoc}
+                  disabled={!sessionDocs.length}
                   variant={view === "workspace" ? "contained" : "outlined"}
                   sx={{
                     borderRadius: 3,
@@ -1167,7 +1270,7 @@ export default function App() {
                         <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: "wrap" }} useFlexGap>
                           <Chip
                             icon={<UploadFileRoundedIcon />}
-                            label={files.length ? `${files.length} file(s) attached` : "0 files attached"}
+                            label={`${files.length} file(s) attached`}
                             size="small"
                             sx={{
                               bgcolor: "rgba(255,255,255,0.05)",
@@ -1177,7 +1280,7 @@ export default function App() {
                             }}
                           />
 
-                          {files.slice(0, 6).map((f) => (
+                          {files.slice(0, MAX_FILES).map((f) => (
                             <Chip
                               key={`${f.name}_${f.size}`}
                               label={f.name}
@@ -1192,19 +1295,6 @@ export default function App() {
                               }}
                             />
                           ))}
-
-                          {files.length > 6 && (
-                            <Chip
-                              label={`+${files.length - 6} more`}
-                              size="small"
-                              sx={{
-                                bgcolor: "rgba(124,92,255,0.10)",
-                                color: "rgba(124,92,255,0.95)",
-                                border: "1px solid rgba(124,92,255,0.25)",
-                                fontWeight: 950
-                              }}
-                            />
-                          )}
                         </Stack>
 
                         <Stack direction="row" spacing={1} alignItems="center" justifyContent="flex-end">
@@ -1212,7 +1302,7 @@ export default function App() {
                             variant="outlined"
                             onClick={open}
                             startIcon={<UploadFileRoundedIcon />}
-                            disabled={loading}
+                            disabled={loading || files.length >= MAX_FILES}
                             sx={{
                               borderRadius: 999,
                               fontWeight: 950,
@@ -1262,15 +1352,19 @@ export default function App() {
               </>
             ) : (
               <Box sx={{ flex: 1, overflow: "auto", p: { xs: 1.2, md: 2.6 } }}>
-                {selectedDoc ? (
-                  <Paper sx={{ ...glass, borderRadius: 2, p: { xs: 1.2, md: 1.6 } }}>
-                    <DocumentCard doc={selectedDoc} apiBase={API_BASE} onDeleted={onDeleted} onToast={showToast} />
-                  </Paper>
+                {sessionDocs.length ? (
+                  <Stack spacing={2}>
+                    {sessionDocs.map((d) => (
+                      <Paper key={d.doc_id} sx={{ ...glass, borderRadius: 2, p: { xs: 1.2, md: 1.6 } }}>
+                        <DocumentCard doc={d} apiBase={API_BASE} onDeleted={onDeleted} onToast={showToast} />
+                      </Paper>
+                    ))}
+                  </Stack>
                 ) : (
                   <Paper sx={{ ...glass, borderRadius: 4, p: 2.2 }}>
-                    <Typography sx={{ fontWeight: 950, fontSize: 14.5 }}>No document selected</Typography>
+                    <Typography sx={{ fontWeight: 950, fontSize: 14.5 }}>No documents yet</Typography>
                     <Typography sx={{ mt: 0.8, color: "rgba(237,242,250,0.62)" }}>
-                      Run the agent to create results, then open Workspace.
+                      Run the agent (with up to {MAX_FILES} files) to create results, then open Workspace.
                     </Typography>
                   </Paper>
                 )}
@@ -1285,18 +1379,77 @@ export default function App() {
           onClose={() => setSidebarMobileOpen(false)}
           sx={{ display: { xs: "block", md: "none" } }}
           PaperProps={{
-            sx: { width: Math.min(380, sidebarWidth), bgcolor: "rgba(9, 12, 22, 0.90)", backdropFilter: "blur(16px)" }
+            sx: {
+              width: Math.min(380, sidebarWidth),
+              bgcolor: "rgba(9, 12, 22, 0.90)",
+              backdropFilter: "blur(16px)"
+            }
           }}
         >
           <Box sx={{ width: "100%", height: "100%" }}>{SidebarExpanded}</Box>
         </Drawer>
 
-        <Toast
-          open={toast.open}
-          message={toast.message}
-          type={toast.type}
-          onClose={() => setToast((t) => ({ ...t, open: false }))}
-        />
+        <Dialog
+          open={renameOpen}
+          onClose={closeRename}
+          PaperProps={{
+            sx: {
+              ...glass,
+              borderRadius: 2,
+              width: "min(520px, calc(100vw - 32px))"
+            }
+          }}
+        >
+          <DialogTitle sx={{ fontWeight: 950 }}>Rename chat</DialogTitle>
+          <DialogContent sx={{ pt: 1.2 }}>
+            <TextField
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              autoFocus
+              fullWidth
+              placeholder="Enter a chat name…"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  confirmRename();
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  closeRename();
+                }
+              }}
+              sx={{
+                mt: 0.5,
+                "& .MuiOutlinedInput-root": {
+                  borderRadius: 3,
+                  bgcolor: "rgba(2, 6, 23, 0.42)",
+                  "& fieldset": { borderColor: "rgba(148,163,184,0.20)" },
+                  "&:hover fieldset": { borderColor: "rgba(148,163,184,0.32)" },
+                  "&.Mui-focused fieldset": { borderColor: "rgba(124,92,255,0.60)" }
+                }
+              }}
+            />
+          </DialogContent>
+          <DialogActions sx={{ px: 2.2, pb: 1.8 }}>
+            <Button onClick={closeRename} variant="text" sx={{ borderRadius: 999, fontWeight: 950, color: "rgba(237,242,250,0.72)" }}>
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmRename}
+              variant="contained"
+              sx={{
+                borderRadius: 999,
+                fontWeight: 950,
+                backgroundImage: "linear-gradient(135deg, rgba(124,92,255,0.98), rgba(124,92,255,0.60))",
+                border: "1px solid rgba(124,92,255,0.55)"
+              }}
+            >
+              Save
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        <Toast open={toast.open} message={toast.message} type={toast.type} onClose={() => setToast((t) => ({ ...t, open: false }))} />
       </Box>
     </ThemeProvider>
   );
