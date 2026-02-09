@@ -1,37 +1,37 @@
 # 🩸 Blood Agent — AI-Powered Blood Test Analysis Platform
 
-An end-to-end AI platform for automated blood test document processing: OCR → anonymization → structured extraction → LOINC enrichment, delivered through a unified agent-based pipeline.
+Blood Agent is an end-to-end AI system for processing blood test documents (PDFs/images):
+**OCR → anonymization → structured extraction → LOINC enrichment**.
 
-The system integrates **LLM agents**, **medical document processing**, **FastAPI**, **MinIO object storage**, and a **React web UI** to transform raw lab reports (PDFs/images) into **anonymized, structured, semantically enriched** laboratory data.
+It combines an **LLM tool-orchestrated pipeline**, **FastAPI**, **MinIO object storage**, and a **React web UI** to convert raw lab reports into **anonymized, structured, semantically enriched** laboratory data.
 
 ---
 
 ## 🚀 Features
 
-- Upload blood test PDFs or images  
-- OCR & text extraction (PDF + image support)  
-- Automated anonymization of personal identifiers (PII)  
-- LLM-based lab result extraction  
-- Structured JSON output for lab tests  
-- LOINC code lookup, validation & enrichment  
-- Object storage via MinIO (Bronze / Silver layers)  
-- FastAPI backend with interactive Swagger UI  
-- React-based chat-style web UI  
+- Upload blood test PDFs or images
+- OCR & text extraction (PDF + image support)
+- Automated anonymization of personal identifiers (PII)
+- LLM-based lab result extraction into structured JSON
+- LOINC code lookup, validation & enrichment
+- MinIO object storage (Bronze / Silver layers)
+- FastAPI backend with Swagger/OpenAPI docs
+- React web UI (chat + workspace review experience)
 - Agent-orchestrated pipeline (PydanticAI)
 
 ---
 
 ## 🧪 Processing Pipeline
 
-1. Upload a blood test document (PDF or image)  
-2. OCR & text extraction  
-3. Store raw inputs and extracted artifacts in the **Bronze** layer (MinIO)  
-4. Anonymize personal identifiers (PII)  
-5. Convert anonymized text into structured JSON  
-6. Validate and enrich results with **LOINC** codes  
-7. Store anonymized text and enriched JSON outputs in the **Silver** layer (MinIO)
+1. Upload a blood test document (PDF or image)
+2. OCR & text extraction
+3. Store raw inputs and extracted artifacts in **Bronze** (MinIO)
+4. Anonymize personal identifiers (PII)
+5. Convert anonymized text into structured JSON
+6. Validate and enrich lab items with **LOINC** codes
+7. Store anonymized text + enriched JSON outputs in **Silver** (MinIO)
 
-Each step is orchestrated by an **LLM agent** using tool-based execution.
+Each step is executed as a tool in an agent-driven workflow.
 
 ---
 
@@ -48,12 +48,42 @@ Each step is orchestrated by an **LLM agent** using tool-based execution.
 ### Frontend
 - React
 - Fetch API
-- Chat-style UI
+- Workspace-style UI
 
 ### AI / NLP
 - OCR (Tesseract, OCRmyPDF)
 - LLM-based extraction and validation
 - LOINC semantic enrichment
+
+---
+
+## ▶️ Run Locally (Docker)
+
+### Prerequisites
+- Docker + Docker Compose
+
+### Setup
+1. Create a `.env` file (example):
+   - `OPENAI_API_KEY=...`
+
+2. Start services:
+   ```bash
+   docker compose up --build
+   
+---
+
+## Access
+
+- **Frontend: http://localhost:3000**
+- **API (Swagger): http://localhost:8000/docs**
+
+---
+
+## 📁 Repository Structure (high level)
+
+- **blood-agent/ — agent + tools (OCR, anonymize, JSON extraction, LOINC validation)**
+- **blood-agent-api/ — FastAPI service (endpoints, persistence, MinIO integration)**
+- **blood-agent-ui/ — React UI (upload, chat, workspace review)**
 
 ---
 
