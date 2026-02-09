@@ -45,6 +45,25 @@ import DocumentCard from "./components/DocumentCard";
 
 const API_BASE = (process.env.REACT_APP_API_URL || "http://localhost:8000").replace(/\/$/, "");
 const MAX_FILES = 5;
+const STORAGE_KEY = "blood_agent_sessions_v1";
+
+function loadPersistedSessions() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { sessions: [], activeSessionId: null };
+
+    const parsed = JSON.parse(raw);
+    const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
+    const activeSessionId = typeof parsed?.activeSessionId === "string" ? parsed.activeSessionId : null;
+
+    // If activeSessionId is not present in sessions, drop it
+    const validActive = activeSessionId && sessions.some((s) => s?.id === activeSessionId) ? activeSessionId : null;
+
+    return { sessions, activeSessionId: validActive };
+  } catch {
+    return { sessions: [], activeSessionId: null };
+  }
+}
 
 const theme = createTheme({
   palette: {
@@ -82,6 +101,26 @@ const railGlass = {
 
 function nowId(prefix = "id") {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function baseName(filename = "") {
+  const clean = (filename || "").trim();
+  if (!clean) return "Document";
+  const lastSlash = Math.max(clean.lastIndexOf("/"), clean.lastIndexOf("\\"));
+  const justName = lastSlash >= 0 ? clean.slice(lastSlash + 1) : clean;
+  const dot = justName.lastIndexOf(".");
+  return dot > 0 ? justName.slice(0, dot) : justName;
+}
+
+function smartSessionTitle(fileNames = [], maxLen = 42) {
+  if (!fileNames.length) return "New chat";
+  const clamp = (t) => (t.length > maxLen ? t.slice(0, maxLen - 1) + "…" : t);
+
+  const first = baseName(fileNames[0] || "");
+  if (fileNames.length === 1) return clamp(first);
+
+  const plus = fileNames.length - 1;
+  return clamp(`${first} +${plus} file${plus === 1 ? "" : "s"}`);
 }
 
 function LogoAvatar({ size = 40 }) {
@@ -197,7 +236,7 @@ function Bubble({ role, children }) {
 function SessionCard({ s, active, onClick, onRename, onDelete }) {
   const title = s?.title || "Chat";
   const subtitle = s?.subtitle || "No results yet";
-  const docCount = Array.isArray(s?.docs) ? s.docs.length : 0;
+  const docCount = (Array.isArray(s?.docs) ? s.docs.length : 0) + (s?.queuedDocs || 0);
 
   const [menuAnchor, setMenuAnchor] = useState(null);
   const menuOpen = Boolean(menuAnchor);
@@ -275,7 +314,7 @@ function SessionCard({ s, active, onClick, onRename, onDelete }) {
         <Stack direction="row" spacing={0.8} alignItems="center" sx={{ flex: "0 0 auto" }}>
           <Chip
             size="small"
-            label={`${docCount} docs`}
+            label={`${docCount} file(s)`}
             sx={{
               height: 22,
               fontWeight: 950,
@@ -334,7 +373,7 @@ function SessionCard({ s, active, onClick, onRename, onDelete }) {
               <ListItemIcon sx={{ minWidth: 30, color: "rgba(237,242,250,0.70)" }}>
                 <EditRoundedIcon fontSize="small" />
               </ListItemIcon>
-                Rename
+              Rename
             </MenuItem>
 
             <MenuItem
@@ -401,8 +440,8 @@ export default function App() {
   const [renameSessionId, setRenameSessionId] = useState(null);
   const [renameValue, setRenameValue] = useState("");
 
-  const [sessions, setSessions] = useState([]);
-  const [activeSessionId, setActiveSessionId] = useState(null);
+  const [sessions, setSessions] = useState(() => loadPersistedSessions().sessions);
+  const [activeSessionId, setActiveSessionId] = useState(() => loadPersistedSessions().activeSessionId);
 
   const [view, setView] = useState("chat");
   const [loading, setLoading] = useState(false);
@@ -434,6 +473,12 @@ export default function App() {
       if (showToast._t) window.clearTimeout(showToast._t);
     };
   }, [showToast]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ sessions, activeSessionId }));
+    } catch {}
+  }, [sessions, activeSessionId]);
 
   const activeSession = useMemo(() => sessions.find((s) => s.id === activeSessionId) || null, [sessions, activeSessionId]);
 
@@ -509,7 +554,9 @@ export default function App() {
       status: "idle",
       messages: [],
       docs: [],
-      coverUrl: ""
+      queuedDocs: 0,
+      coverUrl: "",
+      userRenamed: false
     };
     setSessions((prev) => [session, ...prev]);
     setActiveSessionId(newId);
@@ -567,7 +614,9 @@ export default function App() {
     if (!renameSessionId) return closeRename();
     if (!nextTitle) return;
 
-    setSessions((prev) => prev.map((s) => (s.id === renameSessionId ? { ...s, title: nextTitle } : s)));
+    setSessions((prev) =>
+      prev.map((s) => (s.id === renameSessionId ? { ...s, title: nextTitle, userRenamed: true } : s))
+    );
     closeRename();
   }, [closeRename, renameSessionId, renameValue]);
 
@@ -639,16 +688,27 @@ export default function App() {
 
     const rawPrompt = (prompt || "").trim();
     const filesToSend = files.slice(0, MAX_FILES);
+    const sentCount = filesToSend.length;
+
     const fileNames = filesToSend.map((f) => f.name);
-    const promptToSend = rawPrompt || "Process the attached document(s).";
+    const autoTitle = smartSessionTitle(fileNames);
+
+    const promptToSend = rawPrompt || "Process the attached file(s).";
 
     setPrompt("");
     setFiles([]);
 
     appendMessage(sid, "user", rawPrompt || "(attached files)", { files: fileNames });
 
+    updateSession(sid, (s) => ({
+      ...s,
+      queuedDocs: (s.queuedDocs || 0) + sentCount,
+      title: s.userRenamed ? s.title : autoTitle,
+      subtitle: `Processing ${sentCount} file(s)…`,
+      status: "working"
+    }));
+
     const pendingId = appendMessage(sid, "assistant", "Processing…");
-    updateSession(sid, { status: "working", subtitle: "Processing…" });
     setLoading(true);
 
     const formData = new FormData();
@@ -691,19 +751,27 @@ export default function App() {
       );
 
       updateSession(sid, (s) => {
+        const nextQueued = Math.max(0, (s.queuedDocs || 0) - sentCount);
         const docs = [...okDocs, ...(s.docs || [])];
         const coverUrl = okDocs[0]?.preview_url || s.coverUrl || "";
-        const title = okDocs[0]?.filename ? okDocs[0].filename : s.title || "Chat";
-        const subtitle = okDocs.length ? `${okDocs.length} document(s) processed` : s.subtitle || "No results yet";
+        const subtitle = docs.length ? `${docs.length} document(s) processed` : "No results yet";
         const status = (okDocs[0]?.status || s.status || "idle").toLowerCase();
-        return { ...s, docs, coverUrl, title, subtitle, status };
+
+        return { ...s, docs, coverUrl, subtitle, status, queuedDocs: nextQueued };
       });
 
       if (okDocs.length) setView("workspace");
       showToast("Run complete.", "success");
     } catch (e) {
       replaceMessage(sid, pendingId, `Error: ${e.message}`);
-      updateSession(sid, { status: "error", subtitle: "Error" });
+
+      updateSession(sid, (s) => ({
+        ...s,
+        queuedDocs: Math.max(0, (s.queuedDocs || 0) - sentCount),
+        status: "error",
+        subtitle: "Error"
+      }));
+
       setView("chat");
       showToast(`Error: ${e.message}`, "error");
     } finally {
