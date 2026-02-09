@@ -39,6 +39,7 @@ import PersonRoundedIcon from "@mui/icons-material/PersonRounded";
 import MoreVertRoundedIcon from "@mui/icons-material/MoreVertRounded";
 import EditRoundedIcon from "@mui/icons-material/EditRounded";
 import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
+import PushPinRoundedIcon from "@mui/icons-material/PushPinRounded";
 
 import { useDropzone } from "react-dropzone";
 import DocumentCard from "./components/DocumentCard";
@@ -56,10 +57,16 @@ function loadPersistedSessions() {
     const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
     const activeSessionId = typeof parsed?.activeSessionId === "string" ? parsed.activeSessionId : null;
 
-    // If activeSessionId is not present in sessions, drop it
-    const validActive = activeSessionId && sessions.some((s) => s?.id === activeSessionId) ? activeSessionId : null;
+    const normalizedSessions = sessions.map((s) => {
+      const pinned = !!s?.pinned;
+      const pinnedAt = typeof s?.pinnedAt === "number" ? s.pinnedAt : null;
+      return { ...s, pinned, pinnedAt };
+    });
 
-    return { sessions, activeSessionId: validActive };
+    const validActive =
+      activeSessionId && normalizedSessions.some((s) => s?.id === activeSessionId) ? activeSessionId : null;
+
+    return { sessions: normalizedSessions, activeSessionId: validActive };
   } catch {
     return { sessions: [], activeSessionId: null };
   }
@@ -226,17 +233,18 @@ function Bubble({ role, children }) {
             border: "1px solid rgba(148,163,184,0.14)"
           }}
         >
-          <Typography sx={{ fontSize: 12, fontWeight: 950 }}>You</Typography>
+          <PersonRoundedIcon sx={{ fontSize: 18, color: "rgba(237,242,250,0.85)" }} />
         </Avatar>
       )}
     </Box>
   );
 }
 
-function SessionCard({ s, active, onClick, onRename, onDelete }) {
+function SessionCard({ s, active, onClick, onRename, onDelete, onTogglePin }) {
   const title = s?.title || "Chat";
   const subtitle = s?.subtitle || "No results yet";
   const docCount = (Array.isArray(s?.docs) ? s.docs.length : 0) + (s?.queuedDocs || 0);
+  const pinned = !!s?.pinned;
 
   const [menuAnchor, setMenuAnchor] = useState(null);
   const menuOpen = Boolean(menuAnchor);
@@ -260,6 +268,13 @@ function SessionCard({ s, active, onClick, onRename, onDelete }) {
     e.stopPropagation();
     closeMenu(e);
     onRename?.(s);
+  };
+
+  const handleTogglePin = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    closeMenu(e);
+    onTogglePin?.(s);
   };
 
   const handleDelete = (e) => {
@@ -358,6 +373,24 @@ function SessionCard({ s, active, onClick, onRename, onDelete }) {
               }
             }}
           >
+            <MenuItem
+              onClick={handleTogglePin}
+              sx={{
+                borderRadius: 1.5,
+                px: 1.0,
+                py: 0.6,
+                fontWeight: 900,
+                fontSize: 12.5,
+                minHeight: 34,
+                "&:hover": { bgcolor: "rgba(255,255,255,0.06)" }
+              }}
+            >
+              <ListItemIcon sx={{ minWidth: 30, color: "rgba(237,242,250,0.70)" }}>
+                <PushPinRoundedIcon fontSize="small" />
+              </ListItemIcon>
+              {pinned ? "Unpin" : "Pin"}
+            </MenuItem>
+
             <MenuItem
               onClick={handleRename}
               sx={{
@@ -484,8 +517,26 @@ export default function App() {
 
   const displayedSessions = useMemo(() => {
     const q = (search || "").trim().toLowerCase();
-    if (!q) return sessions;
-    return sessions.filter((s) => `${s?.title || ""} ${s?.subtitle || ""}`.toLowerCase().includes(q));
+    const filtered = !q
+      ? sessions
+      : sessions.filter((s) => `${s?.title || ""} ${s?.subtitle || ""}`.toLowerCase().includes(q));
+
+    const pinnedSortKey = (s) => (typeof s?.pinnedAt === "number" ? s.pinnedAt : 0);
+    const createdKey = (s) => (typeof s?.createdAt === "number" ? s.createdAt : 0);
+
+    return [...filtered].sort((a, b) => {
+      const ap = a?.pinned ? 1 : 0;
+      const bp = b?.pinned ? 1 : 0;
+      if (ap !== bp) return bp - ap;
+
+      if (a?.pinned && b?.pinned) {
+        const pa = pinnedSortKey(a);
+        const pb = pinnedSortKey(b);
+        if (pa !== pb) return pb - pa;
+      }
+
+      return createdKey(b) - createdKey(a);
+    });
   }, [sessions, search]);
 
   const messages = useMemo(() => {
@@ -556,7 +607,9 @@ export default function App() {
       docs: [],
       queuedDocs: 0,
       coverUrl: "",
-      userRenamed: false
+      userRenamed: false,
+      pinned: false,
+      pinnedAt: null
     };
     setSessions((prev) => [session, ...prev]);
     setActiveSessionId(newId);
@@ -619,6 +672,19 @@ export default function App() {
     );
     closeRename();
   }, [closeRename, renameSessionId, renameValue]);
+
+  const togglePin = useCallback((session) => {
+    const sid = session?.id;
+    if (!sid) return;
+
+    setSessions((prev) =>
+      prev.map((s) => {
+        if (s.id !== sid) return s;
+        const nextPinned = !s?.pinned;
+        return { ...s, pinned: nextPinned, pinnedAt: nextPinned ? Date.now() : null };
+      })
+    );
+  }, []);
 
   const deleteSession = useCallback(
     (session) => {
@@ -955,6 +1021,7 @@ export default function App() {
                 }}
                 onRename={openRename}
                 onDelete={deleteSession}
+                onTogglePin={togglePin}
               />
             ))}
           </Stack>
