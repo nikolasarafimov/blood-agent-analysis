@@ -45,6 +45,7 @@ import { useDropzone } from "react-dropzone";
 import DocumentCard from "./components/DocumentCard";
 
 const API_BASE = (process.env.REACT_APP_API_URL || "http://localhost:8000").replace(/\/$/, "");
+const DEMO_MODE = process.env.REACT_APP_DEMO_MODE === "true";
 const MAX_FILES = 5;
 const STORAGE_KEY = "blood_agent_sessions_v1";
 
@@ -465,6 +466,166 @@ function Toast({ open, message, type, onClose }) {
   );
 }
 
+function makeDemoDocs(fileNames = []) {
+  const names = fileNames.length ? fileNames : ["demo-blood-test.pdf"];
+
+  return names.map((filename, index) => ({
+    doc_id: `demo_doc_${Date.now()}_${index + 1}`,
+    filename,
+    status: "ready",
+    preview_url: "",
+    json_url: "",
+    rows_url: "",
+    mode: "demo",
+    summary:
+      "Demo result generated from anonymized sample data. No real medical document was uploaded or processed.",
+    extracted_text:
+      "Patient: [ANONYMIZED]\nHemoglobin: 14.2 g/dL\nWhite blood cells: 6.1 x10^9/L\nGlucose: 92 mg/dL\nPlatelets: 245 x10^9/L",
+    structured_json: {
+      patient: "[ANONYMIZED]",
+      disclaimer: "Demo output only. Not for medical diagnosis or clinical use.",
+      observations: [
+        {
+          test_name: "Hemoglobin",
+          value: 14.2,
+          unit: "g/dL",
+          loinc: "718-7",
+          interpretation: "within typical adult reference range"
+        },
+        {
+          test_name: "White blood cells",
+          value: 6.1,
+          unit: "10^9/L",
+          loinc: "6690-2",
+          interpretation: "within typical adult reference range"
+        },
+        {
+          test_name: "Glucose",
+          value: 92,
+          unit: "mg/dL",
+          loinc: "2345-7",
+          interpretation: "within typical fasting reference range"
+        },
+        {
+          test_name: "Platelets",
+          value: 245,
+          unit: "10^9/L",
+          loinc: "777-3",
+          interpretation: "within typical adult reference range"
+        }
+      ]
+    }
+  }));
+}
+
+function DemoDocumentCard({ doc }) {
+  const observations = doc?.structured_json?.observations || [];
+
+  return (
+    <Stack spacing={2}>
+      <Box>
+        <Typography sx={{ fontWeight: 950, fontSize: 16 }}>
+          Demo blood analysis result
+        </Typography>
+
+        <Typography sx={{ mt: 0.6, color: "rgba(237,242,250,0.62)", fontSize: 13 }}>
+          {doc?.filename || "demo-blood-test.pdf"}
+        </Typography>
+
+        <Chip
+          size="small"
+          label="Safe demo data"
+          sx={{
+            mt: 1,
+            bgcolor: "rgba(124,92,255,0.14)",
+            color: "rgba(237,242,250,0.92)",
+            border: "1px solid rgba(124,92,255,0.35)",
+            fontWeight: 950
+          }}
+        />
+      </Box>
+
+      <Paper
+        sx={{
+          p: 1.6,
+          borderRadius: 2,
+          bgcolor: "rgba(255,255,255,0.04)",
+          border: "1px solid rgba(148,163,184,0.14)"
+        }}
+      >
+        <Typography sx={{ fontWeight: 950, mb: 1 }}>Extracted text</Typography>
+        <Typography
+          component="pre"
+          sx={{
+            m: 0,
+            whiteSpace: "pre-wrap",
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            fontSize: 12.5,
+            color: "rgba(237,242,250,0.82)"
+          }}
+        >
+          {doc?.extracted_text}
+        </Typography>
+      </Paper>
+
+      <Paper
+        sx={{
+          p: 1.6,
+          borderRadius: 2,
+          bgcolor: "rgba(255,255,255,0.04)",
+          border: "1px solid rgba(148,163,184,0.14)"
+        }}
+      >
+        <Typography sx={{ fontWeight: 950, mb: 1 }}>Structured observations</Typography>
+
+        <Stack spacing={1}>
+          {observations.map((item, index) => (
+            <Box
+              key={`${item.test_name}_${index}`}
+              sx={{
+                p: 1.2,
+                borderRadius: 2,
+                bgcolor: "rgba(2,6,23,0.38)",
+                border: "1px solid rgba(148,163,184,0.12)"
+              }}
+            >
+              <Typography sx={{ fontWeight: 950, fontSize: 13.5 }}>
+                {item.test_name}
+              </Typography>
+
+              <Typography sx={{ mt: 0.5, fontSize: 13, color: "rgba(237,242,250,0.78)" }}>
+                Value: {item.value} {item.unit}
+              </Typography>
+
+              <Typography sx={{ mt: 0.3, fontSize: 12.5, color: "rgba(237,242,250,0.58)" }}>
+                LOINC: {item.loinc}
+              </Typography>
+
+              <Typography sx={{ mt: 0.3, fontSize: 12.5, color: "rgba(34,197,94,0.88)" }}>
+                {item.interpretation}
+              </Typography>
+            </Box>
+          ))}
+        </Stack>
+      </Paper>
+
+      <Paper
+        sx={{
+          p: 1.4,
+          borderRadius: 2,
+          bgcolor: "rgba(239,68,68,0.08)",
+          border: "1px solid rgba(239,68,68,0.20)"
+        }}
+      >
+        <Typography sx={{ fontSize: 12.5, color: "rgba(237,242,250,0.78)" }}>
+          Demo output only. Not for medical diagnosis or clinical use. Real OCR, MinIO storage,
+          LLM extraction, and backend processing are disabled in this public demo.
+        </Typography>
+      </Paper>
+    </Stack>
+  );
+}
+
 export default function App() {
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
@@ -540,16 +701,18 @@ export default function App() {
   }, [sessions, search]);
 
   const messages = useMemo(() => {
-    const base = [
-      {
-        id: "m_welcome",
-        role: "assistant",
-        text: `Attach up to ${MAX_FILES} PDF/image files to begin. Then write something and press Run (or Enter).`
-      }
-    ];
-    if (!activeSession) return base;
-    return Array.isArray(activeSession.messages) && activeSession.messages.length ? activeSession.messages : base;
-  }, [activeSession]);
+      const base = [
+        {
+          id: "m_welcome",
+          role: "assistant",
+          text: DEMO_MODE
+            ? `Safe Demo Mode is enabled. Attach any sample PDF/image file to simulate the Blood Analysis Agent workflow. Real upload, OCR, MinIO storage, and AI processing are disabled in this public demo.`
+            : `Attach up to ${MAX_FILES} PDF/image files to begin. Then write something and press Run (or Enter).`
+        }
+      ];
+      if (!activeSession) return base;
+      return Array.isArray(activeSession.messages) && activeSession.messages.length ? activeSession.messages : base;
+ }, [activeSession]);
 
   const sessionDocs = useMemo(() => {
     const docs = activeSession?.docs;
@@ -782,7 +945,51 @@ export default function App() {
     formData.append("prompt", promptToSend);
 
     try {
-      const res = await fetch(`${API_BASE}/run-agent`, { method: "POST", body: formData });
+      if (DEMO_MODE) {
+        await new Promise((resolve) => setTimeout(resolve, 900));
+
+        const okDocs = makeDemoDocs(fileNames);
+
+        const summary = okDocs
+          .map((d) => {
+            const name = d?.filename ? ` (${d.filename})` : "";
+            return `• ${d.doc_id}${name} — demo ready`;
+          })
+          .join("\n");
+
+        replaceMessage(
+          sid,
+          pendingId,
+            `Demo complete.
+
+            Created demo documents:
+            ${summary}
+            
+            This public demo uses anonymized sample data only. Real file upload, OCR, MinIO storage, and LLM processing are disabled for privacy and cost control.
+            
+            Open Workspace to review the demo result.`
+        );
+
+        updateSession(sid, (s) => {
+          const nextQueued = Math.max(0, (s.queuedDocs || 0) - sentCount);
+          const docs = [...okDocs, ...(s.docs || [])];
+
+          return {
+            ...s,
+            docs,
+            coverUrl: "",
+            subtitle: `${docs.length} demo document(s) processed`,
+            status: "demo",
+            queuedDocs: nextQueued
+          };
+        });
+
+        setView("workspace");
+        showToast("Demo run complete.", "success");
+        return;
+      }
+
+  const res = await fetch(`${API_BASE}/run-agent`, { method: "POST", body: formData });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err?.detail || res.statusText || "Server error");
@@ -1031,7 +1238,7 @@ export default function App() {
       <Divider sx={{ borderColor: "rgba(148,163,184,0.14)" }} />
 
       <Box sx={{ p: 1.4 }}>
-        <Typography sx={{ fontSize: 11.5, color: "rgba(237,242,250,0.55)" }}>API: {API_BASE}</Typography>
+        <Typography sx={{ fontSize: 11.5, color: "rgba(237,242,250,0.55)" }}>{DEMO_MODE ? "Mode: Safe demo, no backend calls" : `API: ${API_BASE}`}</Typography>
       </Box>
 
       <Box
@@ -1276,7 +1483,21 @@ export default function App() {
               <Typography sx={{ fontWeight: 950, fontSize: 14.8 }}>{view === "chat" ? "Chat" : "Workspace"}</Typography>
             </Stack>
 
-            <StatusPill loading={loading} />
+                        <Stack direction="row" spacing={1} alignItems="center">
+              {DEMO_MODE && (
+                <Chip
+                  size="small"
+                  label="Safe Demo Mode"
+                  sx={{
+                    bgcolor: "rgba(124,92,255,0.14)",
+                    color: "rgba(237,242,250,0.92)",
+                    border: "1px solid rgba(124,92,255,0.35)",
+                    fontWeight: 950
+                  }}
+                />
+              )}
+              <StatusPill loading={loading} />
+            </Stack>
           </Box>
 
           <Box sx={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
@@ -1491,7 +1712,11 @@ export default function App() {
                   <Stack spacing={2}>
                     {sessionDocs.map((d) => (
                       <Paper key={d.doc_id} sx={{ ...glass, borderRadius: 2, p: { xs: 1.2, md: 1.6 } }}>
-                        <DocumentCard doc={d} apiBase={API_BASE} onDeleted={onDeleted} onToast={showToast} />
+                        {DEMO_MODE || d?.mode === "demo" ? (
+                          <DemoDocumentCard doc={d} />
+                        ) : (
+                          <DocumentCard doc={d} apiBase={API_BASE} onDeleted={onDeleted} onToast={showToast} />
+                        )}
                       </Paper>
                     ))}
                   </Stack>
