@@ -1,5 +1,7 @@
 # Blood Agent
 
+[![CI](https://github.com/nikolasarafimov/blood-agent-analysis/actions/workflows/ci.yml/badge.svg)](https://github.com/nikolasarafimov/blood-agent-analysis/actions/workflows/ci.yml)
+
 **AI-assisted laboratory report processing with OCR, local-first anonymization, structured JSON extraction, and conservative LOINC mapping.**
 
 Blood Agent is an end-to-end academic and portfolio project for processing laboratory reports supplied as PDF or image files. It combines text extraction, PII anonymization, AI-assisted structuring, object storage, a FastAPI API, and a React review workspace.
