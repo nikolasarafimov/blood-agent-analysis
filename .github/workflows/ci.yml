@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend - React Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: blood-agent-ui
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: blood-agent-ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --include=dev --no-audit --no-fund
+
+      - name: Build production frontend
+        env:
+          CI: "true"
+          GENERATE_SOURCEMAP: "false"
+          REACT_APP_API_URL: http://localhost:8000
+          REACT_APP_OCR_LANGUAGE: mkd+eng
+          REACT_APP_PERSIST_SESSIONS: "false"
+        run: npm run build
+
+  backend:
+    name: Backend - Python Syntax
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate Python syntax
+        run: |
+          python -m compileall -q blood-agent blood-agent-api
+
+  docker:
+    name: Docker - Compose Validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Compose configuration
+        run: |
+          docker compose --env-file .env.example config --quiet
+
+      - name: Verify required services
+        shell: bash
+        run: |
+          services="$(docker compose --env-file .env.example config --services)"
+
+          for service in minio minio-init api ui; do
+            if ! grep -Fxq "$service" <<< "$services"; then
+              echo "::error::Missing service: $service"
+              exit 1
+            fi
+          done
