@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Blood Agent — Academic Project Preview</title>
+  <meta name="description" content="Blood Agent is an academic AI-assisted laboratory document processing project. Limited public portfolio preview."/>
+  <meta name="theme-color" content="#080b16" />
+  <meta name="referrer" content="no-referrer" />
+  <style>
+    :root {
+      color-scheme: dark;
+
+      --bg: #080b16;
+      --surface: #11182b;
+      --text: #f1f2ff;
+      --muted: #a7b3cf;
+      --purple: #a78bfa;
+      --line: rgba(179, 157, 255, 0.18);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      min-height: 100%;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+
+      font-family:
+        Inter,
+        "Segoe UI",
+        system-ui,
+        -apple-system,
+        sans-serif;
+
+      background:
+        radial-gradient(
+          ellipse at 20% 5%,
+          rgba(119, 84, 239, 0.17),
+          transparent 50%
+        ),
+        radial-gradient(
+          ellipse at 90% 75%,
+          rgba(69, 136, 180, 0.07),
+          transparent 45%
+        ),
+        var(--bg);
+
+      color: var(--text);
+      line-height: 1.6;
+
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    a:focus-visible {
+      outline: 2px solid var(--purple);
+      outline-offset: 4px;
+    }
+
+    .container {
+      width: min(100% - 40px, 1040px);
+      margin: 0 auto;
+    }
+
+    header {
+      padding: 25px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .navbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 18px;
+      font-weight: 800;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+
+      width: 42px;
+      height: 42px;
+
+      border-radius: 14px;
+
+      color: #d5c6ff;
+      background: #2b214f;
+
+      border: 1px solid rgba(180, 150, 255, 0.30);
+
+      box-shadow:
+        0 0 26px rgba(145, 112, 255, 0.13);
+
+      font-size: 14px;
+      font-weight: 900;
+    }
+
+    .project-label {
+      color: #baa9ec;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.13em;
+    }
+
+    main {
+      padding: 82px 0 90px;
+    }
+
+    .hero {
+      max-width: 840px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+
+      color: #c8b9ff;
+
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      content: "";
+
+      width: 7px;
+      height: 7px;
+
+      border-radius: 50%;
+      background: var(--purple);
+    }
+
+    h1 {
+      max-width: 850px;
+      margin: 23px 0 19px;
+
+      font-size: clamp(37px, 5.6vw, 67px);
+      font-weight: 850;
+      letter-spacing: -0.055em;
+      line-height: 1.11;
+    }
+
+    .gradient-text {
+      color: #bba5ff;
+      background: linear-gradient(
+        100deg,
+        #d2c4ff,
+        #a78bfa 60%,
+        #76d9e2
+      );
+
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .intro {
+      max-width: 720px;
+
+      margin: 0;
+
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.85;
+    }
+
+    .workflow-title {
+      margin-top: 46px;
+      margin-bottom: 15px;
+
+      color: #a99acb;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.15em;
+    }
+
+    .workflow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 13px;
+    }
+
+    .step {
+      min-width: 0;
+      padding: 19px;
+
+      border: 1px solid var(--line);
+      border-radius: 16px;
+
+      background: rgba(17, 24, 43, 0.70);
+    }
+
+    .step-number {
+      display: block;
+      margin-bottom: 9px;
+
+      color: var(--purple);
+
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .step-name {
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .notice {
+      display: flex;
+      gap: 15px;
+      align-items: flex-start;
+
+      margin-top: 28px;
+      padding: 24px;
+
+      border-radius: 17px;
+
+      background: rgba(22, 29, 50, 0.78);
+      border: 1px solid var(--line);
+    }
+
+    .notice-icon {
+      font-size: 23px;
+      color: #beaaff;
+      line-height: 1.2;
+    }
+
+    .notice h2 {
+      margin: 0 0 7px;
+
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .notice p {
+      margin: 0;
+
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.75;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      flex-wrap: wrap;
+
+      margin-top: 32px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+
+      min-height: 45px;
+      padding: 0 22px;
+
+      border-radius: 12px;
+
+      color: white;
+      background: linear-gradient(
+        120deg,
+        #9c7cff,
+        #7755e8
+      );
+
+      font-size: 13px;
+      font-weight: 750;
+      text-decoration: none;
+
+      box-shadow:
+        0 12px 28px rgba(112, 76, 221, 0.21);
+
+      transition:
+        transform 180ms ease,
+        filter 180ms ease;
+    }
+
+    .button:hover {
+      transform: translateY(-2px);
+      filter: brightness(1.08);
+    }
+
+    .secondary-note {
+      color: #8f9bb7;
+      font-size: 12px;
+    }
+
+    footer {
+      padding: 22px 0;
+
+      color: #8793af;
+      font-size: 12px;
+
+      border-top: 1px solid var(--line);
+    }
+
+    .footer-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    @media (max-width: 680px) {
+      header {
+        padding: 18px 0;
+      }
+
+      .project-label {
+        font-size: 9px;
+      }
+
+      main {
+        padding: 55px 0 65px;
+      }
+
+      .intro {
+        font-size: 14px;
+      }
+
+      .workflow {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .step {
+        padding: 15px;
+      }
+
+      .notice {
+        padding: 19px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .button {
+        transition: none;
+      }
+
+      .button:hover {
+        transform: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container navbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">BA</span>
+        <span>Blood Agent</span>
+      </div>
+
+      <span class="project-label">
+        ACADEMIC PROJECT
+      </span>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <div class="eyebrow">
+        AI &amp; Medical Informatics
+      </div>
+
+      <h1>
+        Laboratory Intelligence,
+        <span class="gradient-text">
+          Simplified.
+        </span>
+      </h1>
+
+      <p class="intro">
+        Blood Agent is an academic software project
+        exploring AI-assisted laboratory document
+        processing, privacy-aware information extraction,
+        and structured medical data representation.
+      </p>
+    </section>
+
+    <section aria-labelledby="workflow-heading">
+
+      <h2 id="workflow-heading" class="workflow-title">
+        PROJECT WORKFLOW
+      </h2>
+
+      <div class="workflow">
+        <div class="step">
+          <span class="step-number">01</span>
+          <div class="step-name">OCR &amp; Extraction</div>
+        </div>
+
+        <div class="step">
+          <span class="step-number">02</span>
+          <div class="step-name">PII Anonymization</div>
+        </div>
+
+        <div class="step">
+          <span class="step-number">03</span>
+          <div class="step-name">Structured JSON</div>
+        </div>
+
+        <div class="step">
+          <span class="step-number">04</span>
+          <div class="step-name">LOINC Mapping</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="notice">
+      <span class="notice-icon" aria-hidden="true">◇</span>
+
+      <div>
+        <h2>Limited Public Preview</h2>
+
+        <p>
+          This page provides a high-level overview of
+          the academic project. Document uploads,
+          AI processing, laboratory result editing,
+          and backend access are not available
+          in the public preview.
+
+          The full application is intended for local
+          development and academic evaluation.
+        </p>
+      </div>
+    </section>
+
+    <div class="actions">
+      <a
+        class="button"
+        href="https://github.com/nikolasarafimov/blood-agent-analysis"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        View on GitHub &rarr;
+      </a>
+
+      <span class="secondary-note">
+        Research &amp; educational purposes only
+      </span>
+    </div>
+  </main>
+
+  <footer>
+    <div class="container footer-row">
+      <span>© 2026 Blood Agent Project</span>
+      <span>
+        Not intended for clinical use
+      </span>
+    </div>
+  </footer>
+</body>
+</html>
