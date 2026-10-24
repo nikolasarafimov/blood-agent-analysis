@@ -5,7 +5,7 @@ import json
 import os
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -13,28 +13,45 @@ _DB_LOCK = threading.Lock()
 
 
 def _now_iso() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
 
 
 def _db_path() -> str:
-    p = (
+    path = (
         os.getenv("SQLITE_DB_PATH")
         or os.getenv("DB_PATH")
         or "bronze.sqlite3"
     )
-    Path(p).parent.mkdir(parents=True, exist_ok=True)
-    return p
+
+    Path(path).parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    return path
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(_db_path(), check_same_thread=False)
+    conn = sqlite3.connect(
+        _db_path(),
+        check_same_thread=False,
+        timeout=30.0,
+    )
+
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000;")
+
     return conn
 
 
 def init_db() -> None:
     with _DB_LOCK:
         conn = _connect()
+
         try:
             cur = conn.cursor()
 
@@ -59,29 +76,20 @@ def init_db() -> None:
                     json_text TEXT,
                     editable_json_key TEXT,
                     editable_text_key TEXT,
+                    editable_extracted_key TEXT,
+                    editable_anonymized_key TEXT,
                     filename TEXT
                 );
                 """
             )
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents(updated_at);")
-
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS lab_rows (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    doc_id TEXT NOT NULL,
-                    row_id TEXT NOT NULL,
-                    row_json TEXT NOT NULL,
-                    created_at TEXT,
-                    updated_at TEXT,
-                    UNIQUE(doc_id, row_id)
-                );
-                """
-            )
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_lab_rows_doc_id ON lab_rows(doc_id);")
 
             cur.execute("PRAGMA table_info(documents);")
-            existing_cols = {row["name"] for row in cur.fetchall()}
+
+            existing_cols = {
+                row["name"]
+                for row in cur.fetchall()
+            }
+
             desired_cols = {
                 "status": "TEXT DEFAULT 'created'",
                 "error": "TEXT",
@@ -100,13 +108,47 @@ def init_db() -> None:
                 "json_text": "TEXT",
                 "editable_json_key": "TEXT",
                 "editable_text_key": "TEXT",
+                "editable_extracted_key": "TEXT",
+                "editable_anonymized_key": "TEXT",
                 "filename": "TEXT",
             }
-            for col, ddl in desired_cols.items():
-                if col not in existing_cols:
-                    cur.execute(f"ALTER TABLE documents ADD COLUMN {col} {ddl};")
+
+            for column, ddl in desired_cols.items():
+                if column not in existing_cols:
+                    cur.execute(
+                        f"ALTER TABLE documents ADD COLUMN {column} {ddl};"
+                    )
+
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_documents_updated_at
+                ON documents(updated_at);
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS lab_rows (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    doc_id TEXT NOT NULL,
+                    row_id TEXT NOT NULL,
+                    row_json TEXT NOT NULL,
+                    created_at TEXT,
+                    updated_at TEXT,
+                    UNIQUE(doc_id, row_id)
+                );
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_lab_rows_doc_id
+                ON lab_rows(doc_id);
+                """
+            )
 
             conn.commit()
+
         finally:
             conn.close()
 
@@ -114,18 +156,52 @@ def init_db() -> None:
 def _normalize_json(value: Any) -> str:
     if value is None:
         return "null"
+
     if isinstance(value, str):
-        s = value.strip()
-        if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
-            return value
-        return json.dumps(value, ensure_ascii=False)
-    return json.dumps(value, ensure_ascii=False, indent=2)
+        stripped = value.strip()
+
+        if stripped:
+            try:
+                parsed = json.loads(stripped)
+
+                json.dumps(
+                    parsed,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                )
+
+                return stripped
+
+            except (
+                json.JSONDecodeError,
+                ValueError,
+                TypeError,
+                OverflowError,
+            ):
+                pass
+
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        indent=2,
+        allow_nan=False,
+    )
 
 
-def _stable_row_id(doc_id: str, row_obj: Any) -> str:
+def _stable_row_id(
+    doc_id: str,
+    row_obj: Any,
+) -> str:
     blob = _normalize_json(row_obj).encode("utf-8")
-    h = hashlib.sha1(blob).hexdigest()[:16]
-    return f"{doc_id[:8]}_{h}"
+    digest = hashlib.sha1(blob).hexdigest()[:16]
+
+    return f"{doc_id[:8]}_{digest}"
 
 
 def _upsert_base(
@@ -146,75 +222,90 @@ def _upsert_base(
     json_text: Optional[str] = None,
     editable_json_key: Optional[str] = None,
     editable_text_key: Optional[str] = None,
+    editable_extracted_key: Optional[str] = None,
+    editable_anonymized_key: Optional[str] = None,
     filename: Optional[str] = None,
+    invalidate_saved_rows: bool = False,
 ) -> None:
     init_db()
+
     now = _now_iso()
 
-    fields: Dict[str, Any] = {"doc_id": doc_id, "updated_at": now}
+    fields: Dict[str, Any] = {
+        "doc_id": doc_id,
+        "updated_at": now,
+    }
 
-    if status is not None:
-        fields["status"] = status
-    if error is not None:
-        fields["error"] = error
+    candidates = {
+        "status": status,
+        "error": error,
+        "original_bucket": original_bucket,
+        "original_key": original_key,
+        "text_bucket": text_bucket,
+        "text_key": text_key,
+        "anonymized_bucket": anonymized_bucket,
+        "anonymized_key": anonymized_key,
+        "preview_bucket": preview_bucket,
+        "preview_key": preview_key,
+        "json_bucket": json_bucket,
+        "json_key": json_key,
+        "json_text": json_text,
+        "editable_json_key": editable_json_key,
+        "editable_text_key": editable_text_key,
+        "editable_extracted_key": editable_extracted_key,
+        "editable_anonymized_key": editable_anonymized_key,
+        "filename": filename,
+    }
 
-    if original_bucket is not None:
-        fields["original_bucket"] = original_bucket
-    if original_key is not None:
-        fields["original_key"] = original_key
+    fields.update(
+        {
+            key: value
+            for key, value in candidates.items()
+            if value is not None
+        }
+    )
 
-    if text_bucket is not None:
-        fields["text_bucket"] = text_bucket
-    if text_key is not None:
-        fields["text_key"] = text_key
+    columns = list(fields)
+    insert_columns = columns + ["created_at"]
 
-    if anonymized_bucket is not None:
-        fields["anonymized_bucket"] = anonymized_bucket
-    if anonymized_key is not None:
-        fields["anonymized_key"] = anonymized_key
+    insert_columns_sql = ", ".join(insert_columns)
+    placeholders_sql = ", ".join(
+        "?" for _ in insert_columns
+    )
 
-    if preview_bucket is not None:
-        fields["preview_bucket"] = preview_bucket
-    if preview_key is not None:
-        fields["preview_key"] = preview_key
+    update_sql = ", ".join(
+        f"{column}=excluded.{column}"
+        for column in columns
+        if column != "doc_id"
+    )
 
-    if json_bucket is not None:
-        fields["json_bucket"] = json_bucket
-    if json_key is not None:
-        fields["json_key"] = json_key
-    if json_text is not None:
-        fields["json_text"] = json_text
-
-    if editable_json_key is not None:
-        fields["editable_json_key"] = editable_json_key
-    if editable_text_key is not None:
-        fields["editable_text_key"] = editable_text_key
-
-    if filename is not None:
-        fields["filename"] = filename
-
-    cols = list(fields.keys())
-    insert_cols_sql = ", ".join(cols + ["created_at"])
-    placeholders_sql = ", ".join(["?"] * (len(cols) + 1))
-    update_cols = [c for c in cols if c != "doc_id"]
-    update_sql = ", ".join([f"{c}=excluded.{c}" for c in update_cols])
-
-    values = [fields[c] for c in cols] + [now]
+    values = [
+        fields[column]
+        for column in columns
+    ] + [now]
 
     with _DB_LOCK:
         conn = _connect()
+
         try:
             conn.execute(
                 f"""
-                INSERT INTO documents ({insert_cols_sql})
+                INSERT INTO documents ({insert_columns_sql})
                 VALUES ({placeholders_sql})
                 ON CONFLICT(doc_id) DO UPDATE SET
-                    {update_sql}
-                ;
+                    {update_sql};
                 """,
                 values,
             )
+
+            if invalidate_saved_rows:
+                conn.execute(
+                    "DELETE FROM lab_rows WHERE doc_id = ?",
+                    (doc_id,),
+                )
+
             conn.commit()
+
         finally:
             conn.close()
 
@@ -227,91 +318,231 @@ def insert_record(
     filename: Optional[str] = None,
     **_kwargs: Any,
 ) -> None:
-    _upsert_base(doc_id, status=status, original_bucket=bucket, original_key=key, filename=filename)
+    _upsert_base(
+        doc_id,
+        status=status,
+        original_bucket=bucket,
+        original_key=key,
+        filename=filename,
+    )
 
 
-def get_record(doc_id: str) -> Optional[Dict[str, Any]]:
+def get_record(
+    doc_id: str,
+) -> Optional[Dict[str, Any]]:
     init_db()
+
     with _DB_LOCK:
         conn = _connect()
+
         try:
-            cur = conn.execute("SELECT * FROM documents WHERE doc_id = ?", (doc_id,))
-            row = cur.fetchone()
-            if not row:
+            row = conn.execute(
+                "SELECT * FROM documents WHERE doc_id = ?",
+                (doc_id,),
+            ).fetchone()
+
+            if row is None:
                 return None
-            d = dict(row)
 
-            if "key" not in d:
-                d["key"] = d.get("original_key")
-            if "preview_image_key" not in d:
-                d["preview_image_key"] = d.get("preview_key")
-            if "anonymized_txt" not in d:
-                d["anonymized_txt"] = d.get("anonymized_key")
+            record = dict(row)
 
-            return d
+            record.setdefault(
+                "key",
+                record.get("original_key"),
+            )
+
+            record.setdefault(
+                "preview_image_key",
+                record.get("preview_key"),
+            )
+
+            record.setdefault(
+                "anonymized_txt",
+                record.get("anonymized_key"),
+            )
+
+            return record
+
         finally:
             conn.close()
 
 
 def delete_doc(doc_id: str) -> None:
     init_db()
+
     with _DB_LOCK:
         conn = _connect()
+
         try:
-            conn.execute("DELETE FROM lab_rows WHERE doc_id = ?", (doc_id,))
-            conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
+            conn.execute(
+                "DELETE FROM lab_rows WHERE doc_id = ?",
+                (doc_id,),
+            )
+
+            conn.execute(
+                "DELETE FROM documents WHERE doc_id = ?",
+                (doc_id,),
+            )
+
             conn.commit()
+
         finally:
             conn.close()
 
 
-def set_status(doc_id: str, status: str) -> None:
-    _upsert_base(doc_id, status=status)
+def set_status(
+    doc_id: str,
+    status: str,
+) -> None:
+    _upsert_base(
+        doc_id,
+        status=status,
+    )
 
 
-def set_error(doc_id: str, error: str) -> None:
-    _upsert_base(doc_id, error=error)
+def set_error(
+    doc_id: str,
+    error: str,
+) -> None:
+    _upsert_base(
+        doc_id,
+        error=error,
+    )
 
 
-def set_bucket(doc_id: str, bucket: str) -> None:
-    _upsert_base(doc_id, original_bucket=bucket)
+def set_bucket(
+    doc_id: str,
+    bucket: str,
+) -> None:
+    _upsert_base(
+        doc_id,
+        original_bucket=bucket,
+    )
 
 
-def set_original_pointer(doc_id: str, bucket: str, key: str) -> None:
-    _upsert_base(doc_id, original_bucket=bucket, original_key=key)
+def set_original_pointer(
+    doc_id: str,
+    bucket: str,
+    key: str,
+) -> None:
+    _upsert_base(
+        doc_id,
+        original_bucket=bucket,
+        original_key=key,
+    )
 
 
-def set_text_pointer(doc_id: str, key: str, bucket: Optional[str] = None) -> None:
-    _upsert_base(doc_id, text_bucket=bucket, text_key=key)
+def set_text_pointer(
+    doc_id: str,
+    key: str,
+    bucket: Optional[str] = None,
+) -> None:
+    _upsert_base(
+        doc_id,
+        text_bucket=bucket,
+        text_key=key,
+    )
 
 
-def set_preview_image_key(doc_id: str, key: str, bucket: Optional[str] = None) -> None:
-    _upsert_base(doc_id, preview_bucket=bucket, preview_key=key)
+def set_preview_image_key(
+    doc_id: str,
+    key: str,
+    bucket: Optional[str] = None,
+) -> None:
+    _upsert_base(
+        doc_id,
+        preview_bucket=bucket,
+        preview_key=key,
+    )
 
 
-def set_anonymized_text_pointer(doc_id: str, key: str, bucket: Optional[str] = None) -> None:
-    _upsert_base(doc_id, anonymized_bucket=bucket, anonymized_key=key)
+def set_anonymized_text_pointer(
+    doc_id: str,
+    key: str,
+    bucket: Optional[str] = None,
+) -> None:
+    _upsert_base(
+        doc_id,
+        anonymized_bucket=bucket,
+        anonymized_key=key,
+    )
 
 
-def set_anonymized_txt(doc_id: str, key: str) -> None:
-    set_anonymized_text_pointer(doc_id, key)
+def set_anonymized_txt(
+    doc_id: str,
+    key: str,
+) -> None:
+    set_anonymized_text_pointer(
+        doc_id,
+        key,
+    )
 
 
-def set_json(doc_id: str, json_value: Any, bucket: Optional[str] = None, key: Optional[str] = None) -> None:
-    json_text = _normalize_json(json_value)
-    _upsert_base(doc_id, json_bucket=bucket, json_key=key, json_text=json_text)
+def set_json(
+    doc_id: str,
+    json_value: Any,
+    bucket: Optional[str] = None,
+    key: Optional[str] = None,
+) -> None:
+    _upsert_base(
+        doc_id,
+        json_bucket=bucket,
+        json_key=key,
+        json_text=_normalize_json(json_value),
+        invalidate_saved_rows=True,
+    )
 
 
-def set_editable_json_key(doc_id: str, editable_json_key: str) -> None:
-    _upsert_base(doc_id, editable_json_key=editable_json_key)
+def set_editable_json_key(
+    doc_id: str,
+    editable_json_key: str,
+) -> None:
+    _upsert_base(
+        doc_id,
+        editable_json_key=editable_json_key,
+        invalidate_saved_rows=True,
+    )
 
 
-def set_editable_text_key(doc_id: str, editable_text_key: str) -> None:
-    _upsert_base(doc_id, editable_text_key=editable_text_key)
+def set_editable_extracted_key(
+    doc_id: str,
+    editable_extracted_key: str,
+) -> None:
+    _upsert_base(
+        doc_id,
+        editable_extracted_key=editable_extracted_key,
+    )
 
 
-def set_filename(doc_id: str, filename: str) -> None:
-    _upsert_base(doc_id, filename=filename)
+def set_editable_anonymized_key(
+    doc_id: str,
+    editable_anonymized_key: str,
+) -> None:
+    _upsert_base(
+        doc_id,
+        editable_anonymized_key=editable_anonymized_key,
+        editable_text_key=editable_anonymized_key,
+    )
+
+
+def set_editable_text_key(
+    doc_id: str,
+    editable_text_key: str,
+) -> None:
+    set_editable_anonymized_key(
+        doc_id,
+        editable_text_key,
+    )
+
+
+def set_filename(
+    doc_id: str,
+    filename: str,
+) -> None:
+    _upsert_base(
+        doc_id,
+        filename=filename,
+    )
 
 
 def _upsert_lab_row_by_id(
@@ -321,36 +552,56 @@ def _upsert_lab_row_by_id(
 ) -> str:
     init_db()
 
-    inferred: Optional[str] = None
-    if isinstance(row_obj, dict):
-        for k in ("row_id", "id", "key", "uid"):
-            if row_obj.get(k):
-                inferred = str(row_obj[k])
-                break
+    inferred_row_id: Optional[str] = None
 
-    rid = row_id or inferred or _stable_row_id(doc_id, row_obj)
+    if isinstance(row_obj, dict):
+        if row_obj.get("row_id") is not None:
+            inferred_row_id = str(
+                row_obj["row_id"]
+            )
+
+    resolved_row_id = (
+        row_id
+        or inferred_row_id
+        or _stable_row_id(doc_id, row_obj)
+    )
+
     row_json = _normalize_json(row_obj)
     now = _now_iso()
 
     with _DB_LOCK:
         conn = _connect()
+
         try:
             conn.execute(
                 """
-                INSERT INTO lab_rows (doc_id, row_id, row_json, created_at, updated_at)
+                INSERT INTO lab_rows (
+                    doc_id,
+                    row_id,
+                    row_json,
+                    created_at,
+                    updated_at
+                )
                 VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(doc_id, row_id) DO UPDATE SET
                     row_json=excluded.row_json,
-                    updated_at=excluded.updated_at
-                ;
+                    updated_at=excluded.updated_at;
                 """,
-                (doc_id, rid, row_json, now, now),
+                (
+                    doc_id,
+                    resolved_row_id,
+                    row_json,
+                    now,
+                    now,
+                ),
             )
+
             conn.commit()
+
         finally:
             conn.close()
 
-    return rid
+    return resolved_row_id
 
 
 def upsert_lab_row(
@@ -359,93 +610,237 @@ def upsert_lab_row(
     b: Optional[Union[Dict[str, Any], List[Any], str]] = None,
 ) -> str:
     if b is None:
-        return _upsert_lab_row_by_id(doc_id, a, row_id=None)
-    return _upsert_lab_row_by_id(doc_id, b, row_id=str(a))
+        return _upsert_lab_row_by_id(
+            doc_id,
+            a,
+        )
+
+    return _upsert_lab_row_by_id(
+        doc_id,
+        b,
+        row_id=str(a),
+    )
 
 
-def get_saved_rows(doc_id: str) -> List[Dict[str, Any]]:
+def get_saved_rows(
+    doc_id: str,
+) -> List[Dict[str, Any]]:
     init_db()
+
     with _DB_LOCK:
         conn = _connect()
+
         try:
-            cur = conn.execute(
-                "SELECT row_id, row_json, created_at, updated_at FROM lab_rows WHERE doc_id=? ORDER BY id ASC",
+            entries = conn.execute(
+                """
+                SELECT
+                    row_id,
+                    row_json,
+                    created_at,
+                    updated_at
+                FROM lab_rows
+                WHERE doc_id = ?
+                ORDER BY id ASC
+                """,
                 (doc_id,),
-            )
-            out: List[Dict[str, Any]] = []
-            for r in cur.fetchall():
+            ).fetchall()
+
+            rows: List[Dict[str, Any]] = []
+
+            for entry in entries:
+                row_id = str(
+                    entry["row_id"]
+                )
+
                 try:
-                    parsed = json.loads(r["row_json"])
-                except Exception:
-                    parsed = {"raw": r["row_json"]}
+                    parsed = json.loads(
+                        entry["row_json"]
+                    )
+
+                except (
+                    json.JSONDecodeError,
+                    TypeError,
+                ):
+                    parsed = {
+                        "raw": entry["row_json"],
+                    }
 
                 if isinstance(parsed, dict):
-                    parsed.setdefault("row_id", r["row_id"])
-                    parsed.setdefault("_created_at", r["created_at"])
-                    parsed.setdefault("_updated_at", r["updated_at"])
-                    out.append(parsed)
+                    output = parsed.copy()
+
+                    if output.get("row_id") is None:
+                        output["row_id"] = row_id
+
                 else:
-                    out.append(
-                        {
-                            "row_id": r["row_id"],
-                            "value": parsed,
-                            "_created_at": r["created_at"],
-                            "_updated_at": r["updated_at"],
-                        }
+                    output = {
+                        "row_id": row_id,
+                        "value": parsed,
+                    }
+
+                if row_id.isdigit():
+                    output["row_index"] = int(
+                        row_id
                     )
-            return out
+
+                output["_created_at"] = entry[
+                    "created_at"
+                ]
+
+                output["_updated_at"] = entry[
+                    "updated_at"
+                ]
+
+                rows.append(output)
+
+            return rows
+
         finally:
             conn.close()
 
 
-def set_text_key(doc_id: str, key: str) -> None:
-    set_text_pointer(doc_id, key)
+def set_text_key(
+    doc_id: str,
+    key: str,
+) -> None:
+    set_text_pointer(
+        doc_id,
+        key,
+    )
 
 
-def set_extracted_txt(doc_id: str, key: str) -> None:
-    set_text_pointer(doc_id, key)
+def set_extracted_txt(
+    doc_id: str,
+    key: str,
+) -> None:
+    set_text_pointer(
+        doc_id,
+        key,
+    )
 
 
-def set_extracted_text_pointer(doc_id: str, key: str) -> None:
-    set_text_pointer(doc_id, key)
+def set_extracted_text_pointer(
+    doc_id: str,
+    key: str,
+) -> None:
+    set_text_pointer(
+        doc_id,
+        key,
+    )
 
 
-def set_preview_key(doc_id: str, key: str) -> None:
-    set_preview_image_key(doc_id, key)
+def set_preview_key(
+    doc_id: str,
+    key: str,
+) -> None:
+    set_preview_image_key(
+        doc_id,
+        key,
+    )
 
 
-def set_anonymized_key(doc_id: str, key: str) -> None:
-    set_anonymized_text_pointer(doc_id, key)
+def set_anonymized_key(
+    doc_id: str,
+    key: str,
+) -> None:
+    set_anonymized_text_pointer(
+        doc_id,
+        key,
+    )
 
 
-def set_json_key(doc_id: str, key: str) -> None:
-    _upsert_base(doc_id, json_key=key)
+def set_json_key(
+    doc_id: str,
+    key: str,
+) -> None:
+    _upsert_base(
+        doc_id,
+        json_key=key,
+        invalidate_saved_rows=True,
+    )
 
 
-def set_json_pointer(doc_id: str, key: str, bucket: Optional[str] = None) -> None:
-    _upsert_base(doc_id, json_bucket=bucket, json_key=key)
+def set_json_pointer(
+    doc_id: str,
+    key: str,
+    bucket: Optional[str] = None,
+) -> None:
+    _upsert_base(
+        doc_id,
+        json_bucket=bucket,
+        json_key=key,
+        invalidate_saved_rows=True,
+    )
 
 
-def set_bronze_bucket(doc_id: str, bucket: str) -> None:
-    set_bucket(doc_id, bucket)
+def set_bronze_bucket(
+    doc_id: str,
+    bucket: str,
+) -> None:
+    set_bucket(
+        doc_id,
+        bucket,
+    )
 
 
-def set_silver_bucket(doc_id: str, bucket: str) -> None:
-    _upsert_base(doc_id, json_bucket=bucket)
+def set_silver_bucket(
+    doc_id: str,
+    bucket: str,
+) -> None:
+    _upsert_base(
+        doc_id,
+        anonymized_bucket=bucket,
+        json_bucket=bucket,
+    )
 
 
-def get_pointers(doc_id: str) -> Optional[Dict[str, Tuple[Optional[str], Optional[str]]]]:
-    r = get_record(doc_id)
-    if not r:
+def get_pointers(
+    doc_id: str,
+) -> Optional[Dict[str, Tuple[Optional[str], Optional[str]]]]:
+    record = get_record(doc_id)
+
+    if record is None:
         return None
 
-    editable_bucket = r.get("anonymized_bucket") or r.get("text_bucket")  # editable text usually lives with anonymized
+    editable_anonymized_key = (
+        record.get("editable_anonymized_key")
+        or record.get("editable_text_key")
+    )
+
     return {
-        "original": (r.get("original_bucket"), r.get("original_key")),
-        "text": (r.get("text_bucket"), r.get("text_key")),
-        "anonymized": (r.get("anonymized_bucket"), r.get("anonymized_key")),
-        "preview": (r.get("preview_bucket"), r.get("preview_key")),
-        "json": (r.get("json_bucket"), r.get("json_key")),
-        "editable_text": (editable_bucket, r.get("editable_text_key")),
-        "editable_json": (r.get("json_bucket"), r.get("editable_json_key")),
+        "original": (
+            record.get("original_bucket"),
+            record.get("original_key"),
+        ),
+        "text": (
+            record.get("text_bucket"),
+            record.get("text_key"),
+        ),
+        "anonymized": (
+            record.get("anonymized_bucket"),
+            record.get("anonymized_key"),
+        ),
+        "preview": (
+            record.get("preview_bucket"),
+            record.get("preview_key"),
+        ),
+        "json": (
+            record.get("json_bucket"),
+            record.get("json_key"),
+        ),
+        "editable_extracted": (
+            record.get("text_bucket"),
+            record.get("editable_extracted_key"),
+        ),
+        "editable_anonymized": (
+            record.get("anonymized_bucket"),
+            editable_anonymized_key,
+        ),
+        "editable_text": (
+            record.get("anonymized_bucket"),
+            editable_anonymized_key,
+        ),
+        "editable_json": (
+            record.get("json_bucket"),
+            record.get("editable_json_key"),
+        ),
     }

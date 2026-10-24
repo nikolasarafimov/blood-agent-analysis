@@ -1,11 +1,11 @@
-import mimetypes
+from __future__ import annotations
+
 import os
 import platform
 import sys
-import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from dotenv import load_dotenv
 
@@ -16,64 +16,150 @@ if platform.system() == "Windows":
     if poppler_path and os.path.isdir(poppler_path):
         os.environ["PATH"] = poppler_path + os.pathsep + os.environ.get("PATH", "")
 
-from src.models import AgentDependencies
-from src.model_config import ModelConfig, get_model_config, set_model_config
+from db.sqlite_db import get_record, set_error, set_status
 from src.agent import create_blood_agent
+from src.model_config import ModelConfig, get_model_config
+from src.models import AgentDependencies
 from storage.minio_storage import MinioConfig, client
+
+
+_SUPPORTED_EXTENSIONS = {
+    ".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"
+}
+
+_REQUIRED_POINTERS = (
+    "original_key",
+    "text_key",
+    "anonymized_key",
+    "json_key",
+    "editable_json_key",
+)
 
 
 class TeeOutput:
     def __init__(self, file_path: Union[str, Path]):
-        self.file = open(os.fspath(file_path), "w", encoding="utf-8")
+        path = Path(file_path)
+        descriptor = os.open(
+            os.fspath(path),
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            0o600,
+        )
+        try:
+            if os.name == "posix":
+                os.fchmod(descriptor, 0o600)
+            self.file = os.fdopen(descriptor, "w", encoding="utf-8")
+        except Exception:
+            os.close(descriptor)
+            raise
         self.stdout = sys.stdout
 
-    def write(self, text: str):
+    def write(self, text: str) -> int:
         self.stdout.write(text)
         self.file.write(text)
-        self.file.flush()
+        return len(text)
 
-    def flush(self):
+    def flush(self) -> None:
         self.stdout.flush()
         self.file.flush()
 
-    def close(self):
-        try:
+    def close(self) -> None:
+        if not self.file.closed:
+            self.file.flush()
             self.file.close()
-        except Exception:
-            pass
 
-    def __enter__(self):
+    def __enter__(self) -> "TeeOutput":
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.close()
 
 
 def get_processable_files(input_folder: Union[str, Path]) -> List[str]:
-    exts = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp"}
-    p = Path(input_folder)
+    folder = Path(input_folder).expanduser()
 
-    if not p.exists():
-        print(f"Error: Input folder '{p}' does not exist.")
-        return []
-    if not p.is_dir():
-        print(f"Error: '{p}' is not a directory.")
-        return []
+    if not folder.exists():
+        raise FileNotFoundError("Input folder was not found")
+
+    if not folder.is_dir():
+        raise NotADirectoryError("Input path is not a directory")
 
     files: List[str] = []
-    for fp in p.rglob("*"):
-        if not fp.is_file():
-            continue
 
-        if fp.suffix.lower() in exts:
-            files.append(str(fp))
-            continue
+    for path in folder.rglob("*"):
+        if (
+            path.is_file()
+            and not path.is_symlink()
+            and path.suffix.lower() in _SUPPORTED_EXTENSIONS
+        ):
+            files.append(str(path.resolve()))
 
-        mime, _ = mimetypes.guess_type(str(fp))
-        if mime and ("pdf" in mime or "image" in mime):
-            files.append(str(fp))
+    return sorted(files, key=lambda value: (value.casefold(), value))
 
-    return sorted(files)
+
+def _resolve_model_config(
+    model_provider: Optional[str],
+    model_name: Optional[str],
+    model_base_url: Optional[str],
+) -> ModelConfig:
+    if any(value is not None for value in (
+        model_provider, model_name, model_base_url
+    )):
+        return ModelConfig(
+            provider=model_provider,
+            model_name=model_name,
+            base_url=model_base_url,
+        )
+
+    return get_model_config()
+
+
+def _get_agent_output(result: Any) -> Any:
+    if hasattr(result, "output"):
+        return result.output
+
+    if hasattr(result, "data"):
+        return result.data
+
+    return None
+
+
+def _document_complete(record: Optional[dict]) -> bool:
+    return bool(
+        record
+        and record.get("status") == "loinc_enriched"
+        and all(record.get(pointer) for pointer in _REQUIRED_POINTERS)
+    )
+
+
+def _verify_completed_document(doc_id: str) -> None:
+    record = get_record(doc_id)
+
+    if not record:
+        raise RuntimeError("Document record was not found after processing")
+
+    if record.get("status") != "loinc_enriched":
+        raise RuntimeError("The document pipeline did not reach its final stage")
+
+    if not all(record.get(pointer) for pointer in _REQUIRED_POINTERS):
+        raise RuntimeError("The document pipeline is missing a required storage artifact")
+
+
+def _mark_incomplete_document(doc_id: Optional[str], error: Exception) -> bool:
+    if not doc_id:
+        return True
+
+    try:
+        record = get_record(doc_id)
+
+        if not record or record.get("status") == "error" or _document_complete(record):
+            return True
+
+        set_error(doc_id, f"Batch processing failed ({type(error).__name__})")
+        set_status(doc_id, "error")
+        return True
+
+    except Exception:
+        return False
 
 
 def batch_process(
@@ -84,80 +170,86 @@ def batch_process(
     model_provider: Optional[str] = None,
     model_name: Optional[str] = None,
     model_base_url: Optional[str] = None,
-):
-    if model_provider or model_name or model_base_url:
-        model_config = ModelConfig(provider=model_provider, model_name=model_name, base_url=model_base_url)
-        set_model_config(model_config)
-    else:
-        model_config = get_model_config()
-
+) -> List[dict[str, Any]]:
     if log_file is None:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_dir = Path("agent_logs")
         log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = log_dir / f"batch_process_{ts}.log"
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        resolved_log_file = log_dir / f"batch_process_{timestamp}.log"
+
     else:
-        log_file = Path(log_file)
-        log_file.parent.mkdir(parents=True, exist_ok=True)
+        resolved_log_file = Path(log_file).expanduser()
+        resolved_log_file.parent.mkdir(parents=True, exist_ok=True)
 
-    cfg = MinioConfig()
-    mc = client(cfg)
-
-    blood_agent = create_blood_agent(model_config)
-
-    with TeeOutput(log_file) as tee:
-        original_stdout = sys.stdout
-        sys.stdout = tee
-        try:
-            _run_batch_process(
-                input_folder=str(input_folder),
-                language=language,
-                dry_run=dry_run,
-                cfg=cfg,
-                mc=mc,
-                log_file=str(log_file),
-                blood_agent=blood_agent,
-                model_config=model_config,
-            )
-        finally:
-            sys.stdout = original_stdout
+    with TeeOutput(resolved_log_file) as tee:
+        return _run_batch_process(
+            input_folder=input_folder,
+            language=language,
+            dry_run=dry_run,
+            log_file=resolved_log_file,
+            model_provider=model_provider,
+            model_name=model_name,
+            model_base_url=model_base_url,
+            output=tee,
+        )
 
 
 def _run_batch_process(
-    input_folder: str,
+    input_folder: Union[str, Path],
     language: str,
     dry_run: bool,
-    cfg: MinioConfig,
-    mc,
-    log_file: str,
-    blood_agent,
-    model_config,
-):
-    print(f"Model: {model_config.provider}/{model_config.model_name}")
-    print(f"Logging to: {log_file}")
-    print("=" * 60)
+    log_file: Path,
+    model_provider: Optional[str],
+    model_name: Optional[str],
+    model_base_url: Optional[str],
+    output: Any = None,
+) -> List[dict[str, Any]]:
+    stream = output if output is not None else sys.stdout
+
+    def report(*parts: Any) -> None:
+        print(*parts, file=stream, flush=True)
 
     files = get_processable_files(input_folder)
-    if not files:
-        print(f"No processable files found in '{input_folder}'")
-        return
 
-    print(f"Found {len(files)} file(s) to process in '{input_folder}':")
-    for i, filepath in enumerate(files, 1):
-        print(f"  {i}. {Path(filepath).name}")
+    report("=" * 60)
+    report(f"Found {len(files)} supported document(s)")
+
+    for index, filepath in enumerate(files, start=1):
+        report(f"  File {index}: {Path(filepath).suffix.lower()}")
+
+    if not files:
+        report("No processable files found")
+        return []
 
     if dry_run:
-        print("\nDry run mode - files listed but not processed.")
-        return
+        report("Dry run mode: documents were listed but not processed")
+        return []
 
-    print("\n" + "=" * 60)
-    print(f"Running blood_agent on {len(files)} file(s)...")
-    print("=" * 60 + "\n")
+    model_config = _resolve_model_config(
+        model_provider=model_provider,
+        model_name=model_name,
+        model_base_url=model_base_url,
+    )
 
-    results = []
-    for i, filepath in enumerate(files, 1):
-        print(f"\n[{i}/{len(files)}] Running agent on: {Path(filepath).name}")
-        print("-" * 60)
+    cfg = MinioConfig()
+    mc = client(cfg)
+    blood_agent = create_blood_agent(model_config=model_config)
+
+    report(f"Model provider: {model_config.provider}")
+    report(f"Model: {model_config.model_name}")
+    report(f"OCR language: {language}")
+    report("=" * 60)
+
+    results: List[dict[str, Any]] = []
+
+    for index, filepath in enumerate(files, start=1):
+        filename = Path(filepath).name
+        document_label = f"File {index}/{len(files)} ({Path(filepath).suffix.lower()})"
+
+        report(f"Processing {document_label}")
+
+        deps: Optional[AgentDependencies] = None
 
         try:
             deps = AgentDependencies(
@@ -167,65 +259,146 @@ def _run_batch_process(
                 language=language,
             )
 
-            result = blood_agent.run_sync("Process this blood test result.", deps=deps)
+            result = blood_agent.run_sync(
+                "Process this blood test document through the complete pipeline.",
+                deps=deps,
+            )
 
-            print(f"✓ Successfully processed: {Path(filepath).name}")
-            print(f"  Doc ID: {deps.doc_id}")
-            print(f"  Output: {getattr(result, 'output', None)}")
+            doc_id = deps.doc_id
 
-            results.append({"filename": Path(filepath).name, "success": True, "doc_id": deps.doc_id})
-        except Exception as e:
-            print(f"✗ Failed to process: {Path(filepath).name}")
-            print(f"  Error: {e}")
-            print("  Traceback:")
-            print(traceback.format_exc())
-            results.append({"filename": Path(filepath).name, "success": False, "error": str(e)})
+            if not doc_id:
+                raise RuntimeError("Agent finished without assigning a document ID")
 
-    print("\n" + "=" * 60)
-    print("SUMMARY")
-    print("=" * 60)
-    print(f"Total files: {len(results)}")
-    print(f"Successful: {sum(1 for r in results if r['success'])}")
-    print(f"Failed: {sum(1 for r in results if not r['success'])}")
+            _verify_completed_document(doc_id)
 
-    if any(not r["success"] for r in results):
-        print("\nFailed files:")
-        for r in results:
-            if not r["success"]:
-                print(f"  - {r['filename']}: {r['error']}")
+            agent_output = _get_agent_output(result)
 
-    if any(r["success"] for r in results):
-        print("\nSuccessfully processed files:")
-        for r in results:
-            if r["success"]:
-                print(f"  - {r['filename']}: {r['doc_id']}")
+            report(f"[OK] {document_label}")
+            report(f"     Document ID: {doc_id}")
 
-    print("\n" + "=" * 60)
-    print(f"Log saved to: {log_file}")
-    print("=" * 60)
+            if isinstance(agent_output, str) and agent_output.strip():
+                report("     Agent output: processing completed")
+
+            results.append({
+                "filename": filename,
+                "success": True,
+                "doc_id": doc_id,
+            })
+
+        except Exception as exc:
+            doc_id = getattr(deps, "doc_id", None) if deps is not None else None
+            updated = _mark_incomplete_document(doc_id, exc)
+            reason = type(exc).__name__
+
+            report(f"[FAILED] {document_label} ({reason})")
+
+            if doc_id:
+                report(f"         Document ID: {doc_id}")
+
+            if not updated:
+                report("         Warning: failed to update the document status")
+
+            failure: dict[str, Any] = {
+                "filename": filename,
+                "success": False,
+                "error": f"Processing failed ({reason})",
+            }
+
+            if doc_id:
+                failure["doc_id"] = doc_id
+
+            results.append(failure)
+
+    successful = sum(bool(item["success"]) for item in results)
+    failed = len(results) - successful
+
+    report("=" * 60)
+    report("SUMMARY")
+    report(f"Total files: {len(results)}")
+    report(f"Successful: {successful}")
+    report(f"Failed: {failed}")
+    report("=" * 60)
+    report("Batch log completed")
+
+    return results
 
 
-if __name__ == "__main__":
+def main() -> int:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Run blood_agent on multiple blood test files")
-    parser.add_argument("input_folder", type=str, help="Folder with PDFs/images to process")
-    parser.add_argument("--language", type=str, default="mkd+eng", help="OCR language, default mkd+eng")
-    parser.add_argument("--dry-run", action="store_true", help="List files only, do not process")
-    parser.add_argument("--log-file", type=str, default=None, help="Log file path (default: auto)")
+    parser = argparse.ArgumentParser(
+        description="Process laboratory documents with the blood document agent"
+    )
 
-    parser.add_argument("--model-provider", type=str, choices=["openai", "anthropic", "ollama"], default=None)
-    parser.add_argument("--model-name", type=str, default=None)
-    parser.add_argument("--model-base-url", type=str, default=None)
+    parser.add_argument(
+        "input_folder",
+        type=str,
+        help="Folder with PDF or image files",
+    )
+
+    parser.add_argument(
+        "--language",
+        type=str,
+        default="mkd+eng",
+        help="Tesseract OCR language or language combination",
+    )
+
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="List files without processing",
+    )
+
+    parser.add_argument(
+        "--log-file",
+        type=str,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--model-provider",
+        type=str,
+        choices=["openai", "anthropic", "ollama"],
+        default=None,
+    )
+
+    parser.add_argument(
+        "--model-name",
+        type=str,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--model-base-url",
+        type=str,
+        default=None,
+    )
 
     args = parser.parse_args()
 
-    batch_process(
-        input_folder=args.input_folder,
-        language=args.language,
-        dry_run=args.dry_run,
-        log_file=args.log_file,
-        model_provider=args.model_provider,
-        model_name=args.model_name,
-        model_base_url=args.model_base_url,
-    )
+    try:
+        results = batch_process(
+            input_folder=args.input_folder,
+            language=args.language,
+            dry_run=args.dry_run,
+            log_file=args.log_file,
+            model_provider=args.model_provider,
+            model_name=args.model_name,
+            model_base_url=args.model_base_url,
+        )
+
+    except Exception as exc:
+        print(
+            f"Batch processing could not start ({type(exc).__name__})",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.dry_run:
+        return 0
+
+    return 1 if any(not item.get("success", False) for item in results) else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

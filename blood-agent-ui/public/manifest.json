@@ -1,15 +1,19 @@
 {
+  "id": "./",
   "short_name": "Blood Agent",
   "name": "Blood Agent",
+  "description": "Blood test document processing with OCR, anonymization, structured JSON extraction, and LOINC enrichment.",
   "icons": [
     {
       "src": "logo.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     }
   ],
   "start_url": ".",
+  "scope": ".",
   "display": "standalone",
-  "theme_color": "#0b1220",
-  "background_color": "#0b1220"
+  "theme_color": "#070A12",
+  "background_color": "#070A12"
 }

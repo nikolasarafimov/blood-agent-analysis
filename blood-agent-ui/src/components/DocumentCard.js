@@ -1,448 +1,1009 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Box,
-  Paper,
-  Typography,
-  Button,
-  Divider,
-  Tabs,
-  Tab,
-  TextField,
-  Stack,
-  Chip,
-  IconButton,
-  Tooltip,
-  CircularProgress,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions
+  Box, Paper, Typography, Button, Divider, Tabs, Tab, TextField, Stack,
+  Chip, IconButton, Tooltip, CircularProgress, Dialog, DialogTitle,
+  DialogContent, DialogActions
 } from "@mui/material";
-
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import SaveIcon from "@mui/icons-material/Save";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import SyncRoundedIcon from "@mui/icons-material/SyncRounded";
-
+import DescriptionRoundedIcon from "@mui/icons-material/DescriptionRounded";
+import GridViewRoundedIcon from "@mui/icons-material/GridViewRounded";
+import VerifiedOutlinedIcon from "@mui/icons-material/VerifiedOutlined";
+import KeyboardArrowDownRoundedIcon from "@mui/icons-material/KeyboardArrowDownRounded";
 import JsonTableEditor from "./JsonTableEditor";
 
-const glass = {
-  background: "rgba(17, 24, 39, 0.72)",
-  border: "1px solid rgba(148, 163, 184, 0.14)",
-  boxShadow: "0 18px 70px rgba(0,0,0,0.45)",
-  backdropFilter: "blur(12px)"
+const line = "rgba(165,175,208,0.16)";
+const muted = "rgba(193,205,229,0.70)";
+
+const surface = {
+  bgcolor: "rgba(12,18,35,0.78)",
+  border: `1px solid ${line}`,
+  boxShadow: "0 20px 75px rgba(0,0,0,0.28)",
+  backdropFilter: "blur(14px)"
+};
+
+const iconButton = {
+  color: "rgba(232,237,255,0.88)",
+  bgcolor: "rgba(255,255,255,0.045)",
+  border: `1px solid ${line}`,
+  borderRadius: 2.4,
+  "&:hover": {
+    bgcolor: "rgba(153,122,255,0.12)",
+    borderColor: "rgba(166,139,255,0.4)"
+  }
 };
 
 function StatusChip({ value }) {
-  const v = (value || "unknown").toLowerCase();
-  const palette =
-    v.includes("error")
-      ? { bg: "rgba(239,68,68,0.10)", fg: "rgba(239,68,68,0.95)", br: "rgba(239,68,68,0.28)" }
-      : v.includes("uploaded")
-      ? { bg: "rgba(59,130,246,0.10)", fg: "rgba(59,130,246,0.95)", br: "rgba(59,130,246,0.28)" }
-      : v.includes("anonym")
-      ? { bg: "rgba(34,197,94,0.10)", fg: "rgba(34,197,94,0.95)", br: "rgba(34,197,94,0.28)" }
-      : v.includes("json")
-      ? { bg: "rgba(124,92,255,0.10)", fg: "rgba(124,92,255,0.95)", br: "rgba(124,92,255,0.28)" }
-      : v.includes("loinc")
-      ? { bg: "rgba(34,197,94,0.10)", fg: "rgba(34,197,94,0.95)", br: "rgba(34,197,94,0.28)" }
-      : { bg: "rgba(255,255,255,0.06)", fg: "rgba(229,231,235,0.85)", br: "rgba(148,163,184,0.14)" };
+  const status = String(value || "unknown").toLowerCase();
+
+  const rgb = status.includes("error")
+    ? "248,113,113"
+    : status.includes("loinc") || status.includes("anonym")
+      ? "52,211,153"
+      : status.includes("json")
+        ? "167,139,250"
+        : "148,163,184";
 
   return (
     <Chip
+      className="ba-document-status"
       size="small"
       label={value || "unknown"}
       sx={{
-        bgcolor: palette.bg,
-        color: palette.fg,
-        border: `1px solid ${palette.br}`,
-        fontWeight: 950,
-        height: 22
+        height: 25,
+        fontWeight: 800,
+        bgcolor: `rgba(${rgb},0.10)`,
+        color: `rgba(${rgb},0.95)`,
+        border: `1px solid rgba(${rgb},0.27)`
       }}
     />
   );
 }
 
-function toTableRows(jsonObj) {
-  if (!jsonObj) return [];
+function normalizedMeasurement(value, abnormalFlag) {
+  if (typeof value !== "string") {
+    return {
+      value,
+      abnormal_flag: abnormalFlag ?? null
+    };
+  }
 
-  const root = jsonObj?.tests
-    ? jsonObj
-    : jsonObj?.json?.tests
-    ? jsonObj.json
-    : jsonObj?.result?.tests
-    ? jsonObj.result
-    : jsonObj;
+  const number = "([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)";
+  const trimmed = value.trim();
 
-  const tests = Array.isArray(root?.tests) ? root.tests : [];
-  return tests.map((t) => ({
-    parameter: t?.parameter ?? "",
-    value: t?.value ?? "",
-    unit: t?.unit ?? null,
-    loinc_code: t?.loinc_code ?? null,
-    loinc_display: t?.loinc_display ?? null,
-    reference_min: t?.reference_min ?? null,
-    reference_max: t?.reference_max ?? null
+  const prefix = new RegExp(
+    `^([LH])\\s*:?\\s*${number}$`,
+    "i"
+  ).exec(trimmed);
+
+  const suffix = prefix
+    ? null
+    : new RegExp(
+        `^${number}\\s*([LH])$`,
+        "i"
+      ).exec(trimmed);
+
+  const flag = prefix?.[1] || suffix?.[2];
+  const numberText = prefix?.[2] || suffix?.[1];
+
+  if (
+    !flag ||
+    !numberText ||
+    !Number.isFinite(Number(numberText))
+  ) {
+    return {
+      value,
+      abnormal_flag: abnormalFlag ?? null
+    };
+  }
+
+  return {
+    value: Number(numberText),
+    abnormal_flag:
+      abnormalFlag ??
+      (flag.toUpperCase() === "L" ? "low" : "high")
+  };
+}
+
+function toTableRows(source) {
+  const root = source?.tests
+    ? source
+    : source?.json?.tests
+      ? source.json
+      : source?.result?.tests
+        ? source.result
+        : source;
+
+  const tests = Array.isArray(root?.tests)
+    ? root.tests
+    : [];
+
+  return tests.map((test) => ({
+    row_id: test?.row_id ?? null,
+    parameter: test?.parameter ?? "",
+    ...normalizedMeasurement(
+      test?.value ?? "",
+      test?.abnormal_flag
+    ),
+    unit: test?.unit ?? null,
+    loinc_code: test?.loinc_code ?? null,
+    loinc_display: test?.loinc_display ?? null,
+    reference_min: test?.reference_min ?? null,
+    reference_max: test?.reference_max ?? null
   }));
 }
 
 function mergeSavedRows(baseRows, savedRows) {
-  const rows = Array.isArray(baseRows) ? [...baseRows] : [];
-  const saved = Array.isArray(savedRows) ? savedRows : [];
+  const next = Array.isArray(baseRows)
+    ? baseRows.map((row) => ({ ...row }))
+    : [];
 
-  for (const s of saved) {
-    const idx = Number(s?.row_index);
-    if (!Number.isFinite(idx) || idx < 0) continue;
+  const fields = [
+    "parameter",
+    "value",
+    "abnormal_flag",
+    "unit",
+    "loinc_code",
+    "loinc_display",
+    "reference_min",
+    "reference_max"
+  ];
 
-    if (!rows[idx]) rows[idx] = {};
-    rows[idx] = {
-      ...rows[idx],
-      parameter: s?.parameter ?? rows[idx]?.parameter ?? "",
-      value: s?.value ?? rows[idx]?.value ?? "",
-      unit: s?.unit ?? rows[idx]?.unit ?? null,
-      loinc_code: s?.loinc_code ?? rows[idx]?.loinc_code ?? null,
-      loinc_display: s?.loinc_display ?? rows[idx]?.loinc_display ?? null,
-      reference_min: s?.reference_min ?? rows[idx]?.reference_min ?? null,
-      reference_max: s?.reference_max ?? rows[idx]?.reference_max ?? null
+  for (const saved of Array.isArray(savedRows) ? savedRows : []) {
+    const index = Number(
+      saved?.row_index ?? saved?.row_id
+    );
+
+    if (
+      !Number.isInteger(index) ||
+      index < 0 ||
+      index >= next.length
+    ) {
+      continue;
+    }
+
+    const patch = {};
+
+    for (const field of fields) {
+      if (
+        Object.prototype.hasOwnProperty.call(
+          saved,
+          field
+        )
+      ) {
+        patch[field] = saved[field];
+      }
+    }
+
+    const merged = {
+      ...next[index],
+      ...patch
+    };
+
+    next[index] = {
+      ...merged,
+      ...normalizedMeasurement(
+        merged.value,
+        merged.abnormal_flag
+      )
     };
   }
 
-  return rows;
+  return next;
 }
 
-function normalizeRowsResponse(rowsResp) {
-  if (Array.isArray(rowsResp)) return rowsResp;
-  if (rowsResp && Array.isArray(rowsResp.rows)) return rowsResp.rows;
-  return [];
-}
-
-async function safeJson(res) {
+async function safeJson(response) {
   try {
-    return await res.json();
+    return await response.json();
   } catch {
     return null;
   }
 }
 
-export default function DocumentCard({ doc, apiBase, onDeleted, onToast }) {
+function responseError(response, payload, fallback) {
+  const detail = payload?.detail || payload?.error;
+
+  const message = typeof detail === "string"
+    ? detail
+    : Array.isArray(detail)
+      ? detail.map((x) => x?.msg).filter(Boolean).join("; ")
+      : "";
+
+  return new Error(
+    message || response.statusText || fallback
+  );
+}
+
+async function fetchJson(url, fallback, optional = false) {
+  const response = await fetch(url, {
+    cache: "no-store"
+  });
+
+  if (optional && response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw responseError(
+      response,
+      await safeJson(response),
+      fallback
+    );
+  }
+
+  return response.json();
+}
+
+export default function DocumentCard({
+  doc,
+  apiBase,
+  onDeleted,
+  onToast
+}) {
   const docId = doc?.doc_id;
 
   const [meta, setMeta] = useState(null);
   const [tab, setTab] = useState("json");
   const [text, setText] = useState("");
+  const [textDirty, setTextDirty] = useState(false);
+  const [textReady, setTextReady] = useState(false);
+  const [textLoading, setTextLoading] = useState(false);
   const [jsonObj, setJsonObj] = useState(null);
-  const [savedRows, setSavedRows] = useState([]);
   const [tableRows, setTableRows] = useState([]);
+  const [savedRowCount, setSavedRowCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [showEmbeddedPdf, setShowEmbeddedPdf] = useState(false);
 
   const requestSeq = useRef(0);
-
-  const previewUrl = useMemo(() => meta?.preview_url || doc?.preview_url || "", [meta, doc]);
-  const originalUrl = useMemo(() => meta?.original_url || doc?.original_url || "", [meta, doc]);
-
-  const isPdf = useMemo(() => {
-    const filename = (meta?.filename || doc?.filename || "").toLowerCase();
-    const url = (originalUrl || "").toLowerCase();
-    return filename.endsWith(".pdf") || url.includes(".pdf");
-  }, [meta, doc, originalUrl]);
-
-  const toast = useCallback(
-    (msg, type = "info") => {
-      if (typeof onToast === "function") onToast(msg, type);
-    },
-    [onToast]
-  );
-
-  const loadMeta = useCallback(async () => {
-    const res = await fetch(`${apiBase}/docs/${docId}`);
-    if (!res.ok) {
-      const err = await safeJson(res);
-      throw new Error(err?.detail || res.statusText || "Failed to load doc meta");
-    }
-    const m = await res.json();
-    setMeta(m);
-    return m;
-  }, [apiBase, docId]);
-
-  const loadText = useCallback(
-    async (whichTab) => {
-      const res = await fetch(`${apiBase}/docs/${docId}/text?type=${whichTab}`);
-      if (!res.ok) {
-        setText("");
-        return "";
-      }
-      const t = await res.json();
-      const content = t?.content || "";
-      setText(content);
-      return content;
-    },
-    [apiBase, docId]
-  );
-
-  const loadSavedRows = useCallback(async () => {
-    try {
-      const res = await fetch(`${apiBase}/docs/${docId}/rows`);
-      if (!res.ok) return [];
-      const rowsResp = await res.json();
-      const rows = normalizeRowsResponse(rowsResp);
-      setSavedRows(rows);
-      return rows;
-    } catch {
-      setSavedRows([]);
-      return [];
-    }
-  }, [apiBase, docId]);
-
-  const loadResults = useCallback(
-    async (rowsForOverlay) => {
-      const res = await fetch(`${apiBase}/results/${docId}`);
-      if (!res.ok) {
-        setJsonObj(null);
-        setTableRows((prev) => mergeSavedRows(prev, rowsForOverlay));
-        return null;
-      }
-
-      const j = await res.json();
-      setJsonObj(j);
-
-      const base = toTableRows(j);
-      setTableRows(mergeSavedRows(base, rowsForOverlay));
-      return j;
-    },
-    [apiBase, docId]
-  );
-
-  const loadAll = useCallback(
-    async (whichTab = tab) => {
-      if (!docId) return;
-
-      const seq = ++requestSeq.current;
-      setLoading(true);
-
-      try {
-        const [, rows] = await Promise.all([loadMeta(), loadSavedRows()]);
-        if (requestSeq.current !== seq) return;
-        await Promise.all([loadResults(rows), loadText(whichTab)]);
-      } catch (e) {
-        if (requestSeq.current !== seq) return;
-        toast(`Load failed: ${e.message}`, "error");
-      } finally {
-        if (requestSeq.current === seq) setLoading(false);
-      }
-    },
-    [docId, tab, loadMeta, loadSavedRows, loadResults, loadText, toast]
-  );
+  const textRequestSeq = useRef(0);
+  const onToastRef = useRef(onToast);
 
   useEffect(() => {
-    if (!docId) return;
+    onToastRef.current = onToast;
+  }, [onToast]);
+
+  const toast = useCallback((message, type = "info") => {
+    onToastRef.current?.(message, type);
+  }, []);
+
+  const filename =
+    meta?.filename ||
+    doc?.filename ||
+    "";
+
+  const previewUrl =
+    meta?.preview_url ||
+    doc?.preview_url ||
+    "";
+
+  const originalUrl =
+    meta?.original_url ||
+    doc?.original_url ||
+    "";
+
+  const isPdf =
+    filename.toLowerCase().endsWith(".pdf") ||
+    originalUrl.toLowerCase().includes(".pdf");
+
+  const mappedCount = tableRows.filter(
+    (row) => Boolean(row?.loinc_code)
+  ).length;
+
+  const flaggedCount = tableRows.filter(
+    (row) => ["low", "high"].includes(row?.abnormal_flag)
+  ).length;
+
+  const busy = loading || textLoading;
+
+  const urls = useMemo(() => {
+    const safeId = encodeURIComponent(docId || "");
+
+    return {
+      meta: `${apiBase}/docs/${safeId}`,
+      rows: `${apiBase}/docs/${safeId}/rows`,
+      results: `${apiBase}/results/${safeId}`,
+      text: `${apiBase}/docs/${safeId}/text`,
+      regenerate: `${apiBase}/docs/${safeId}/regenerate-json`
+    };
+  }, [apiBase, docId]);
+
+  const loadAll = useCallback(async (showSpinner = true) => {
+    if (!docId) return false;
+
+    const seq = ++requestSeq.current;
+
+    if (showSpinner) {
+      setLoading(true);
+    }
+
+    try {
+      const [documentMeta, storedRows, results] = await Promise.all([
+        fetchJson(
+          urls.meta,
+          "Failed to load document metadata"
+        ),
+        fetchJson(
+          urls.rows,
+          "Failed to load saved rows"
+        ),
+        fetchJson(
+          urls.results,
+          "Failed to load results",
+          true
+        )
+      ]);
+
+      if (seq !== requestSeq.current) {
+        return false;
+      }
+
+      const saved = Array.isArray(storedRows)
+        ? storedRows
+        : Array.isArray(storedRows?.rows)
+          ? storedRows.rows
+          : [];
+
+      setMeta(documentMeta);
+      setJsonObj(results);
+      setSavedRowCount(saved.length);
+      setTableRows(
+        mergeSavedRows(
+          toTableRows(results),
+          saved
+        )
+      );
+
+      return true;
+    } catch (error) {
+      if (seq === requestSeq.current) {
+        toast(
+          `Load failed: ${error.message}`,
+          "error"
+        );
+      }
+
+      return false;
+    } finally {
+      if (showSpinner && seq === requestSeq.current) {
+        setLoading(false);
+      }
+    }
+  }, [docId, urls, toast]);
+
+  const loadText = useCallback(async (type) => {
+    if (!docId) return false;
+
+    const seq = ++textRequestSeq.current;
+
+    setTextLoading(true);
+    setTextReady(false);
+
+    try {
+      const result = await fetchJson(
+        `${urls.text}?type=${encodeURIComponent(type)}`,
+        `Failed to load ${type}`,
+        true
+      );
+
+      if (seq !== textRequestSeq.current) {
+        return false;
+      }
+
+      if (typeof result?.content !== "string") {
+        setText("");
+        setTextDirty(false);
+
+        toast(
+          `${type} text is unavailable.`,
+          "info"
+        );
+
+        return false;
+      }
+
+      setText(result.content);
+      setTextDirty(false);
+      setTextReady(true);
+
+      return true;
+    } catch (error) {
+      if (seq === textRequestSeq.current) {
+        toast(
+          `Load failed: ${error.message}`,
+          "error"
+        );
+      }
+
+      return false;
+    } finally {
+      if (seq === textRequestSeq.current) {
+        setTextLoading(false);
+      }
+    }
+  }, [docId, urls, toast]);
+
+  useEffect(() => {
+    if (!docId) return undefined;
+
+    setMeta(null);
+    setJsonObj(null);
+    setTableRows([]);
+    setText("");
+    setTextDirty(false);
+    setTextReady(false);
+    setSavedRowCount(0);
+    setShowEmbeddedPdf(false);
     setTab("json");
-    loadAll("json");
+
+    loadAll();
+
+    return () => {
+      requestSeq.current += 1;
+      textRequestSeq.current += 1;
+    };
   }, [docId, loadAll]);
 
   useEffect(() => {
-    if (!docId) return;
+    if (!docId) return undefined;
+
+    setText("");
+    setTextReady(false);
     loadText(tab);
+
+    return () => {
+      textRequestSeq.current += 1;
+    };
   }, [docId, tab, loadText]);
 
-  useEffect(() => {
-    const base = toTableRows(jsonObj);
-    if (base.length) setTableRows(mergeSavedRows(base, savedRows));
-  }, [jsonObj, savedRows]);
+  const saveContent = useCallback(async (type, content) => {
+    const response = await fetch(urls.text, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        type,
+        content
+      })
+    });
 
-  const copyToClipboard = async () => {
-    try {
-      await navigator.clipboard.writeText(text || "");
-      toast("Copied to clipboard.", "success");
-    } catch {
-      toast("Copy failed (browser permission).", "error");
+    if (!response.ok) {
+      throw responseError(
+        response,
+        await safeJson(response),
+        "Save failed"
+      );
     }
-  };
 
-  const saveText = async () => {
-    if (!docId) return;
+    return safeJson(response);
+  }, [urls]);
+
+  const saveText = useCallback(async () => {
+    if (
+      !docId ||
+      loading ||
+      textLoading ||
+      !textReady ||
+      !textDirty
+    ) {
+      return;
+    }
+
+    if (!text.trim()) {
+      toast(
+        "Cannot save empty document content.",
+        "error"
+      );
+      return;
+    }
+
+    if (
+      tab === "json" &&
+      savedRowCount > 0 &&
+      !window.confirm(
+        "Saving the complete JSON will clear previously saved table row edits. Continue?"
+      )
+    ) {
+      return;
+    }
+
+    if (tab === "json") {
+      try {
+        const parsed = JSON.parse(text);
+
+        if (
+          !parsed ||
+          typeof parsed !== "object" ||
+          Array.isArray(parsed)
+        ) {
+          throw new Error(
+            "The top-level JSON value must be an object"
+          );
+        }
+      } catch (error) {
+        toast(
+          `Invalid JSON: ${error.message}`,
+          "error"
+        );
+        return;
+      }
+    }
+
     setLoading(true);
 
     try {
-      if (tab === "json") {
-        let parsed;
-        try {
-          parsed = JSON.parse(text || "");
-        } catch (e) {
-          toast(`Invalid JSON: ${e.message}`, "error");
-          return;
-        }
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-          toast("Invalid JSON: top-level must be an object.", "error");
-          return;
-        }
+      await saveContent(tab, text);
+      setTextDirty(false);
+
+      const loaded = await loadAll(false);
+      const editorLoaded = await loadText(tab);
+
+      toast(
+        loaded && editorLoaded
+          ? "Saved."
+          : "Saved, but refreshing the view failed.",
+        loaded && editorLoaded
+          ? "success"
+          : "warning"
+      );
+    } catch (error) {
+      toast(
+        `Save failed: ${error.message}`,
+        "error"
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    docId,
+    loading,
+    textLoading,
+    textReady,
+    textDirty,
+    text,
+    tab,
+    savedRowCount,
+    saveContent,
+    loadAll,
+    loadText,
+    toast
+  ]);
+
+  const regenerate = useCallback(async () => {
+    if (
+      !docId ||
+      loading ||
+      textLoading ||
+      (tab === "anonymized" && !textReady)
+    ) {
+      return;
+    }
+
+    if (
+      textDirty &&
+      tab !== "anonymized" &&
+      !window.confirm(
+        "Regenerating JSON will discard unsaved changes in the current editor. Continue?"
+      )
+    ) {
+      return;
+    }
+
+    if (
+      savedRowCount > 0 &&
+      !window.confirm(
+        "Regenerating JSON will clear saved table row corrections. Continue?"
+      )
+    ) {
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      if (tab === "anonymized") {
+        await saveContent("anonymized", text);
       }
 
-      const res = await fetch(`${apiBase}/docs/${docId}/text`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: tab, content: text })
+      const response = await fetch(urls.regenerate, {
+        method: "POST"
       });
 
-      if (!res.ok) {
-        const err = await safeJson(res);
-        toast(`Save failed: ${err?.detail || res.statusText}`, "error");
-        return;
+      if (!response.ok) {
+        throw responseError(
+          response,
+          await safeJson(response),
+          "JSON regeneration failed"
+        );
       }
 
-      toast("Saved.", "success");
-      await loadAll(tab);
-    } finally {
-      setLoading(false);
-    }
-  };
+      setTextDirty(false);
 
-  const regenerate = async () => {
-    if (!docId) return;
-    setLoading(true);
+      const loaded = await loadAll(false);
+      const alreadyOnJson = tab === "json";
 
-    try {
-      const res = await fetch(`${apiBase}/docs/${docId}/regenerate-json`, { method: "POST" });
-      if (!res.ok) {
-        const err = await safeJson(res);
-        toast(`Regenerate failed: ${err?.detail || res.statusText}`, "error");
-        return;
-      }
-
-      const data = await res.json();
-      const nextJson = data?.json ?? data;
-
-      setJsonObj(nextJson);
       setTab("json");
-      setTableRows(mergeSavedRows(toTableRows(nextJson), savedRows));
 
-      await loadText("json");
-      toast("Regenerated JSON.", "success");
+      const editorLoaded = alreadyOnJson
+        ? await loadText("json")
+        : true;
+
+      toast(
+        loaded && editorLoaded
+          ? "JSON regenerated. Previously saved table row edits were cleared."
+          : "JSON regenerated, but refreshing the view failed.",
+        loaded && editorLoaded
+          ? "success"
+          : "warning"
+      );
+    } catch (error) {
+      toast(
+        `Regenerate failed: ${error.message}`,
+        "error"
+      );
     } finally {
       setLoading(false);
     }
-  };
+  }, [
+    docId,
+    loading,
+    textLoading,
+    textReady,
+    textDirty,
+    tab,
+    text,
+    savedRowCount,
+    urls,
+    saveContent,
+    loadAll,
+    loadText,
+    toast
+  ]);
 
-  const refreshAll = async () => {
-    await loadAll(tab);
-    toast("Refreshed.", "success");
-  };
+  const refreshAll = useCallback(async () => {
+    if (busy) return;
 
-  const deleteDoc = async () => {
-    if (!docId) return;
+    if (
+      textDirty &&
+      !window.confirm(
+        "Discard unsaved editor changes and refresh?"
+      )
+    ) {
+      return;
+    }
+
     setLoading(true);
 
     try {
-      const res = await fetch(`${apiBase}/docs/${docId}`, { method: "DELETE" });
-      if (!res.ok) {
-        const err = await safeJson(res);
-        toast(`Delete failed: ${err?.detail || res.statusText}`, "error");
-        return;
+      const loaded = await loadAll(false);
+      const editorLoaded = loaded && await loadText(tab);
+
+      if (loaded && editorLoaded) {
+        toast(
+          "Refreshed.",
+          "success"
+        );
       }
-      toast("Deleted.", "success");
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    busy,
+    textDirty,
+    loadAll,
+    loadText,
+    tab,
+    toast
+  ]);
+
+  const onRowSaved = useCallback(async () => {
+    try {
+      const storedRows = await fetchJson(
+        urls.rows,
+        "Failed to load saved rows"
+      );
+
+      const saved = Array.isArray(storedRows)
+        ? storedRows
+        : Array.isArray(storedRows?.rows)
+          ? storedRows.rows
+          : [];
+
+      setTableRows(
+        mergeSavedRows(
+          toTableRows(jsonObj),
+          saved
+        )
+      );
+
+      setSavedRowCount(saved.length);
+
+      toast(
+        "Row saved.",
+        "success"
+      );
+    } catch {
+      toast(
+        "Row may have been saved, but the latest rows could not be loaded.",
+        "warning"
+      );
+    }
+  }, [urls, jsonObj, toast]);
+
+  const deleteDoc = useCallback(async () => {
+    if (!docId || busy) return;
+
+    setLoading(true);
+
+    try {
+      const response = await fetch(urls.meta, {
+        method: "DELETE"
+      });
+
+      if (!response.ok) {
+        throw responseError(
+          response,
+          await safeJson(response),
+          "Delete failed"
+        );
+      }
+
       onDeleted?.(docId);
+    } catch (error) {
+      toast(
+        `Delete failed: ${error.message}`,
+        "error"
+      );
     } finally {
       setLoading(false);
       setConfirmOpen(false);
     }
+  }, [
+    docId,
+    busy,
+    urls,
+    onDeleted,
+    toast
+  ]);
+
+  const copyContent = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+
+      toast(
+        "Copied to clipboard.",
+        "success"
+      );
+    } catch {
+      toast(
+        "Copy failed.",
+        "error"
+      );
+    }
+  }, [text, toast]);
+
+  const changeTab = (_event, nextTab) => {
+    if (nextTab === tab || busy) return;
+
+    if (
+      textDirty &&
+      !window.confirm(
+        "Discard unsaved editor changes?"
+      )
+    ) {
+      return;
+    }
+
+    setTextDirty(false);
+    setTextReady(false);
+    setTab(nextTab);
   };
 
   if (!docId) return null;
 
   return (
-    <Paper sx={{ ...glass, borderRadius: "22px", overflow: "hidden", position: "relative" }}>
+    <Paper
+      className="ba-document-card"
+      sx={{
+        ...surface,
+        position: "relative",
+        overflow: "hidden",
+        borderRadius: {
+          xs: 3,
+          md: 4
+        },
+        minWidth: 0
+      }}
+    >
       {loading && (
         <Box
+          className="ba-processing-overlay"
           sx={{
             position: "absolute",
             inset: 0,
-            bgcolor: "rgba(2, 6, 23, 0.55)",
-            backdropFilter: "blur(3px)",
             zIndex: 5,
             display: "grid",
-            placeItems: "center"
+            placeItems: "center",
+            bgcolor: "rgba(4,8,20,0.70)",
+            backdropFilter: "blur(5px)"
           }}
         >
-          <Stack direction="row" spacing={1.2} alignItems="center">
-            <CircularProgress size={18} />
-            <Typography sx={{ fontSize: 13.5, color: "rgba(229,231,235,0.85)", fontWeight: 900 }}>
-              Working…
+          <Stack
+            direction="row"
+            spacing={1.5}
+            alignItems="center"
+            sx={{
+              p: 2.5,
+              borderRadius: 3,
+              bgcolor: "#151c33",
+              border: `1px solid ${line}`
+            }}
+          >
+            <CircularProgress
+              size={19}
+              sx={{ color: "#b6a0ff" }}
+            />
+
+            <Typography
+              sx={{
+                fontSize: 13,
+                fontWeight: 800
+              }}
+            >
+              Updating document…
             </Typography>
           </Stack>
         </Box>
       )}
 
-      <Box sx={{ p: 2.2 }}>
+      <Box
+        sx={{
+          p: {
+            xs: 2,
+            md: 2.8
+          },
+          background:
+            "linear-gradient(110deg,rgba(88,67,160,.13),transparent 52%)"
+        }}
+      >
         <Stack
-          direction={{ xs: "column", md: "row" }}
+          direction={{
+            xs: "column",
+            lg: "row"
+          }}
           spacing={2}
-          alignItems={{ md: "center" }}
+          alignItems={{
+            lg: "center"
+          }}
           justifyContent="space-between"
         >
           <Box sx={{ minWidth: 0 }}>
-            <Typography sx={{ fontWeight: 950, fontSize: 15.2, letterSpacing: 0.2 }}>
-              Document workspace
+            <Typography
+              sx={{
+                fontSize: 10,
+                fontWeight: 850,
+                letterSpacing: 2,
+                color: "#b9a7ff",
+                mb: 0.6
+              }}
+            >
+              DOCUMENT INTELLIGENCE
             </Typography>
 
             <Typography
+              component="h2"
               sx={{
-                mt: 0.6,
-                fontSize: 12.6,
-                color: "rgba(229,231,235,0.78)",
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                wordBreak: "break-all"
+                fontWeight: 850,
+                fontSize: {
+                  xs: 18,
+                  md: 21
+                },
+                letterSpacing: "-0.025em",
+                wordBreak: "break-word"
               }}
             >
-              {docId}
+              {filename || "Document workspace"}
             </Typography>
 
-            <Stack direction="row" spacing={1} sx={{ mt: 1.3, flexWrap: "wrap" }} useFlexGap>
-              <StatusChip value={meta?.status || doc?.status || "unknown"} />
-              {(meta?.filename || doc?.filename) && (
+            <Typography
+              title={docId}
+              sx={{
+                mt: 0.6,
+                fontSize: 11,
+                color: muted,
+                fontFamily:
+                  "ui-monospace, SFMono-Regular, Menlo, monospace",
+                overflowWrap: "anywhere"
+              }}
+            >
+              ID: {docId}
+            </Typography>
+
+            <Stack
+              direction="row"
+              useFlexGap
+              flexWrap="wrap"
+              spacing={0.8}
+              sx={{ mt: 1.4 }}
+            >
+              <StatusChip
+                value={
+                  meta?.status ||
+                  doc?.status ||
+                  "unknown"
+                }
+              />
+
+              <Chip
+                size="small"
+                label={
+                  isPdf
+                    ? "PDF DOCUMENT"
+                    : "IMAGE DOCUMENT"
+                }
+                icon={<DescriptionRoundedIcon />}
+                sx={{
+                  height: 25,
+                  bgcolor: "rgba(157,174,216,.09)",
+                  border: `1px solid ${line}`,
+                  fontSize: 10.5,
+                  fontWeight: 800
+                }}
+              />
+
+              {textDirty && (
                 <Chip
                   size="small"
-                  label={meta?.filename || doc?.filename}
+                  label="Unsaved changes"
                   sx={{
-                    bgcolor: "rgba(255,255,255,0.06)",
-                    color: "rgba(229,231,235,0.85)",
-                    border: "1px solid rgba(148,163,184,0.14)",
-                    maxWidth: 520,
-                    height: 22,
-                    "& .MuiChip-label": { overflow: "hidden", textOverflow: "ellipsis" }
+                    height: 25,
+                    bgcolor: "rgba(255,196,95,.09)",
+                    color: "#ffc76c",
+                    border: "1px solid rgba(255,196,95,.28)",
+                    fontWeight: 800
                   }}
                 />
               )}
             </Stack>
           </Box>
 
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Tooltip title="Refresh">
-              <IconButton
-                onClick={refreshAll}
-                disabled={loading}
-                sx={{
-                  color: "rgba(229,231,235,0.88)",
-                  bgcolor: "rgba(255,255,255,0.06)",
-                  border: "1px solid rgba(148,163,184,0.14)",
-                  "&:hover": { bgcolor: "rgba(255,255,255,0.10)" }
-                }}
-              >
-                <SyncRoundedIcon fontSize="small" />
-              </IconButton>
+          <Stack
+            direction="row"
+            alignItems="center"
+            spacing={1}
+            useFlexGap
+            flexWrap="wrap"
+          >
+            <Tooltip title="Refresh document">
+              <span>
+                <IconButton
+                  aria-label="Refresh document"
+                  disabled={busy}
+                  onClick={refreshAll}
+                  sx={iconButton}
+                >
+                  <SyncRoundedIcon fontSize="small" />
+                </IconButton>
+              </span>
             </Tooltip>
 
             {originalUrl && (
               <Tooltip title="Open original file">
                 <IconButton
-                  onClick={() => window.open(originalUrl, "_blank")}
-                  sx={{
-                    color: "rgba(229,231,235,0.88)",
-                    bgcolor: "rgba(255,255,255,0.06)",
-                    border: "1px solid rgba(148,163,184,0.14)",
-                    "&:hover": { bgcolor: "rgba(255,255,255,0.10)" }
-                  }}
+                  aria-label="Open original file"
+                  onClick={() =>
+                    window.open(
+                      originalUrl,
+                      "_blank",
+                      "noopener,noreferrer"
+                    )
+                  }
+                  sx={iconButton}
                 >
                   <OpenInNewIcon fontSize="small" />
                 </IconButton>
@@ -453,9 +1014,14 @@ export default function DocumentCard({ doc, apiBase, onDeleted, onToast }) {
               variant="contained"
               color="error"
               startIcon={<DeleteOutlineIcon />}
+              disabled={busy}
               onClick={() => setConfirmOpen(true)}
-              disabled={loading}
-              sx={{ borderRadius: 3, fontWeight: 950 }}
+              sx={{
+                borderRadius: 2.5,
+                fontWeight: 800,
+                px: 2,
+                boxShadow: "0 12px 25px rgba(233,70,90,.15)"
+              }}
             >
               Delete
             </Button>
@@ -463,138 +1029,300 @@ export default function DocumentCard({ doc, apiBase, onDeleted, onToast }) {
         </Stack>
       </Box>
 
-      <Divider sx={{ borderColor: "rgba(148,163,184,0.14)" }} />
+      <Divider sx={{ borderColor: line }} />
 
       <Box
         sx={{
-          p: 2.2,
-          display: "grid",
-          gridTemplateColumns: { xs: "1fr", lg: "1.2fr 1fr" },
-          gap: 2,
-          alignItems: "start"
+          px: {
+            xs: 1.5,
+            md: 2.8
+          },
+          py: 1.7,
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 1
         }}
       >
-        <Box sx={{ display: "grid", gap: 2 }}>
-          <Box>
-            <Typography sx={{ fontWeight: 950, fontSize: 13.8, mb: 1 }}>Preview</Typography>
+        <Chip
+          className="ba-metric-chip"
+          icon={<GridViewRoundedIcon />}
+          label={`${tableRows.length} parameters`}
+        />
+
+        <Chip
+          className="ba-metric-chip"
+          icon={<VerifiedOutlinedIcon />}
+          label={`${mappedCount} LOINC mapped`}
+        />
+
+        <Chip
+          className="ba-metric-chip"
+          label={`${flaggedCount} explicitly flagged`}
+        />
+
+        {savedRowCount > 0 && (
+          <Chip
+            className="ba-metric-chip"
+            label={`${savedRowCount} saved row corrections`}
+          />
+        )}
+      </Box>
+
+      <Divider sx={{ borderColor: line }} />
+
+      <Box
+        className="ba-document-grid"
+        sx={{
+          display: "grid",
+          gridTemplateColumns: {
+            xs: "minmax(0, 1fr)",
+            xl: "minmax(310px, .75fr) minmax(0, 1.65fr)"
+          },
+          alignItems: "start",
+          gap: 2.3,
+          p: {
+            xs: 1.4,
+            md: 2.3
+          }
+        }}
+      >
+        <Box
+          className="ba-preview-column"
+          sx={{
+            display: "grid",
+            gap: 2.2,
+            minWidth: 0
+          }}
+        >
+          <Box sx={{ minWidth: 0 }}>
+            <Stack
+              direction="row"
+              alignItems="center"
+              justifyContent="space-between"
+              sx={{ mb: 1 }}
+            >
+              <Typography
+                sx={{
+                  fontSize: 13.2,
+                  fontWeight: 850
+                }}
+              >
+                Document preview
+              </Typography>
+
+              {originalUrl && isPdf && (
+                <Button
+                  size="small"
+                  variant="text"
+                  endIcon={
+                    <KeyboardArrowDownRoundedIcon
+                      sx={{
+                        transform: showEmbeddedPdf
+                          ? "rotate(180deg)"
+                          : "none",
+                        transition: "transform .2s"
+                      }}
+                    />
+                  }
+                  onClick={() =>
+                    setShowEmbeddedPdf((v) => !v)
+                  }
+                  sx={{
+                    color: "#c5b5ff",
+                    fontSize: 11.5
+                  }}
+                >
+                  {showEmbeddedPdf
+                    ? "Hide PDF"
+                    : "View full PDF"}
+                </Button>
+              )}
+            </Stack>
 
             <Box
+              className="ba-preview-frame"
               sx={{
-                borderRadius: 2,
-                border: "1px solid rgba(148,163,184,0.14)",
-                bgcolor: "rgba(255,255,255,0.03)",
-                overflow: "hidden"
+                borderRadius: 3,
+                border: `1px solid ${line}`,
+                overflow: "hidden",
+                bgcolor: "rgba(7,11,25,.55)",
+                display: "grid",
+                placeItems: "center",
+                minHeight: 180
               }}
             >
               {previewUrl ? (
                 <Box
                   component="img"
                   src={previewUrl}
-                  alt="preview"
-                  sx={{ width: "100%", display: "block", maxHeight: 340, objectFit: "contain" }}
+                  alt={filename || "Document preview"}
+                  sx={{
+                    display: "block",
+                    width: "100%",
+                    maxHeight: 355,
+                    objectFit: "contain"
+                  }}
                 />
               ) : (
-                <Box sx={{ p: 2 }}>
-                  <Typography sx={{ color: "rgba(229,231,235,0.65)", fontSize: 13 }}>
-                    No preview available
-                  </Typography>
-                </Box>
+                <Typography
+                  sx={{
+                    color: muted,
+                    p: 3,
+                    fontSize: 12.5
+                  }}
+                >
+                  No preview available
+                </Typography>
               )}
             </Box>
 
-            {originalUrl && isPdf && (
+            {originalUrl && isPdf && showEmbeddedPdf && (
               <Box
+                className="ba-preview-frame"
                 sx={{
                   mt: 1.2,
-                  borderRadius: 2,
-                  border: "1px solid rgba(148,163,184,0.14)",
-                  bgcolor: "rgba(255,255,255,0.03)",
                   overflow: "hidden",
-                  height: 420
+                  border: `1px solid ${line}`,
+                  borderRadius: 3,
+                  height: 440
                 }}
               >
-                <Box component="iframe" title="pdf" src={originalUrl} sx={{ width: "100%", height: "100%", border: 0 }} />
+                <Box
+                  component="iframe"
+                  title={filename || "PDF document"}
+                  src={originalUrl}
+                  sx={{
+                    width: "100%",
+                    height: "100%",
+                    border: 0
+                  }}
+                />
               </Box>
             )}
           </Box>
 
-          <Box>
-            <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+          <Box sx={{ minWidth: 0 }}>
+            <Stack
+              direction="row"
+              alignItems="flex-start"
+              justifyContent="space-between"
+              spacing={1}
+              useFlexGap
+              flexWrap="wrap"
+              sx={{ mb: 1.1 }}
+            >
               <Box>
-                <Typography sx={{ fontWeight: 950, fontSize: 13.8 }}>Editor</Typography>
-                <Typography sx={{ fontSize: 12.5, color: "rgba(229,231,235,0.65)", mt: 0.3 }}>
-                  Edit text/JSON, then Save. Regenerate recreates JSON from the current editable text.
+                <Typography
+                  sx={{
+                    fontSize: 13.2,
+                    fontWeight: 850
+                  }}
+                >
+                  Artifact editor
+                </Typography>
+
+                <Typography
+                  sx={{
+                    mt: 0.3,
+                    fontSize: 11.8,
+                    color: muted
+                  }}
+                >
+                  Inspect and edit extracted text,
+                  anonymized text, or JSON.
                 </Typography>
               </Box>
 
-              <Stack direction="row" spacing={1} alignItems="center">
+              <Stack
+                direction="row"
+                spacing={0.7}
+                alignItems="center"
+                useFlexGap
+                flexWrap="wrap"
+              >
                 <Tooltip title="Copy editor content">
-                  <IconButton
-                    onClick={copyToClipboard}
-                    sx={{
-                      color: "rgba(229,231,235,0.88)",
-                      bgcolor: "rgba(255,255,255,0.06)",
-                      border: "1px solid rgba(148,163,184,0.14)",
-                      "&:hover": { bgcolor: "rgba(255,255,255,0.10)" }
-                    }}
-                  >
-                    <ContentCopyIcon fontSize="small" />
-                  </IconButton>
+                  <span>
+                    <IconButton
+                      aria-label="Copy editor content"
+                      onClick={copyContent}
+                      disabled={!textReady || busy}
+                      size="small"
+                      sx={iconButton}
+                    >
+                      <ContentCopyIcon fontSize="small" />
+                    </IconButton>
+                  </span>
                 </Tooltip>
 
                 <Button
+                  className="ba-primary-action"
                   variant="contained"
                   size="small"
                   startIcon={<SaveIcon />}
                   onClick={saveText}
-                  disabled={loading}
-                  sx={{ borderRadius: 3, fontWeight: 950 }}
+                  disabled={busy || !textReady || !textDirty}
+                  sx={{
+                    fontWeight: 850,
+                    borderRadius: 2.3
+                  }}
                 >
                   Save
                 </Button>
 
-                <Button
-                  variant="outlined"
-                  size="small"
-                  startIcon={<RefreshIcon />}
-                  onClick={regenerate}
-                  disabled={loading}
-                  sx={{
-                    borderRadius: 3,
-                    fontWeight: 950,
-                    color: "rgba(229,231,235,0.88)",
-                    borderColor: "rgba(124,92,255,0.35)",
-                    "&:hover": { borderColor: "rgba(124,92,255,0.55)" }
-                  }}
+                <Tooltip
+                  title="Recreate JSON from anonymized text. Saved row edits will be cleared."
                 >
-                  Regenerate
-                </Button>
+                  <span>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      startIcon={<RefreshIcon />}
+                      onClick={regenerate}
+                      disabled={busy}
+                      sx={{
+                        color: "#d6cbff",
+                        borderColor: "rgba(166,139,255,.35)",
+                        borderRadius: 2.3,
+                        fontWeight: 800
+                      }}
+                    >
+                      Regenerate
+                    </Button>
+                  </span>
+                </Tooltip>
               </Stack>
             </Stack>
 
             <Box
+              className="ba-editor-panel"
               sx={{
-                mt: 1.2,
-                borderRadius: 2,
-                border: "1px solid rgba(148,163,184,0.14)",
-                bgcolor: "rgba(255,255,255,0.03)",
-                overflow: "hidden"
+                minWidth: 0,
+                borderRadius: 3,
+                overflow: "hidden",
+                border: `1px solid ${line}`
               }}
             >
               <Tabs
+                className="ba-editor-tabs"
                 value={tab}
-                onChange={(_, v) => setTab(v)}
+                onChange={changeTab}
+                variant="fullWidth"
+                aria-label="Document editor content type"
                 sx={{
-                  px: 1,
-                  minHeight: 46,
+                  minHeight: 43,
                   "& .MuiTab-root": {
+                    fontSize: 11.8,
                     textTransform: "none",
-                    fontWeight: 950,
-                    minHeight: 46,
-                    color: "rgba(229,231,235,0.65)"
+                    fontWeight: 800,
+                    minHeight: 43,
+                    minWidth: 0,
+                    px: 0.6
                   },
-                  "& .Mui-selected": { color: "rgba(229,231,235,0.92)" },
-                  "& .MuiTabs-indicator": { height: 3, borderRadius: 2, backgroundColor: "rgba(124,92,255,0.85)" }
+                  "& .MuiTabs-indicator": {
+                    height: 3,
+                    bgcolor: "#9d7cff",
+                    borderRadius: 2
+                  }
                 }}
               >
                 <Tab value="json" label="JSON" />
@@ -602,55 +1330,144 @@ export default function DocumentCard({ doc, apiBase, onDeleted, onToast }) {
                 <Tab value="extracted" label="Extracted" />
               </Tabs>
 
-              <Divider sx={{ borderColor: "rgba(148,163,184,0.14)" }} />
+              <Divider sx={{ borderColor: line }} />
 
-              <Box sx={{ p: 1.2 }}>
+              <Box
+                sx={{
+                  p: 1.1,
+                  position: "relative"
+                }}
+              >
+                {textLoading && (
+                  <CircularProgress
+                    size={17}
+                    sx={{
+                      position: "absolute",
+                      top: 18,
+                      right: 18,
+                      zIndex: 2
+                    }}
+                  />
+                )}
+
                 <TextField
                   value={text}
-                  onChange={(e) => setText(e.target.value)}
+                  onChange={(e) => {
+                    setText(e.target.value);
+                    setTextDirty(true);
+                  }}
+                  disabled={busy || !textReady}
                   multiline
                   minRows={14}
+                  maxRows={24}
                   fullWidth
-                  placeholder={tab === "json" ? '{\n  "tests": []\n}' : "Text will appear here…"}
+                  placeholder={
+                    tab === "json"
+                      ? '{\n  "tests": []\n}'
+                      : "Text will appear here…"
+                  }
                   sx={{
                     "& .MuiOutlinedInput-root": {
-                      borderRadius: 2,
-                      bgcolor: "rgba(2, 6, 23, 0.45)",
-                      "& fieldset": { borderColor: "rgba(148,163,184,0.18)" },
-                      "&:hover fieldset": { borderColor: "rgba(148,163,184,0.30)" },
-                      "&.Mui-focused fieldset": { borderColor: "rgba(124,92,255,0.55)" }
-                    }
-                  }}
-                  InputProps={{
-                    style: {
-                      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                      color: "#e5e7eb",
-                      fontSize: 12.9,
-                      lineHeight: 1.65
+                      bgcolor: "rgba(3,8,23,.64)",
+                      borderRadius: 2.2,
+                      alignItems: "flex-start"
+                    },
+                    "& textarea": {
+                      fontFamily:
+                        "ui-monospace, SFMono-Regular, Menlo, monospace",
+                      fontSize: 12.3,
+                      lineHeight: 1.7,
+                      overflowWrap: "anywhere"
                     }
                   }}
                 />
               </Box>
             </Box>
+
+            <Typography
+              sx={{
+                mt: 1,
+                color: "rgba(186,199,224,.58)",
+                fontSize: 10.8,
+                lineHeight: 1.5
+              }}
+            >
+              Regenerate uses the saved anonymized text
+              and clears previously saved table row edits.
+            </Typography>
           </Box>
         </Box>
 
-        <Box>
-          <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
-            <Box>
-              <Typography sx={{ fontWeight: 950, fontSize: 13.8 }}>Table editor</Typography>
-              <Typography sx={{ fontSize: 12.4, color: "rgba(229,231,235,0.65)", mt: 0.3 }}>
-                Edit and save individual rows to persist them into SQLite.
+        <Box
+          className="ba-results-column"
+          sx={{
+            minWidth: 0,
+            width: "100%"
+          }}
+        >
+          <Stack
+            direction={{
+              xs: "column",
+              sm: "row"
+            }}
+            justifyContent="space-between"
+            alignItems={{
+              sm: "center"
+            }}
+            spacing={1}
+            sx={{ mb: 1.2 }}
+          >
+            <Box sx={{ minWidth: 0 }}>
+              <Typography
+                sx={{
+                  fontSize: 13.2,
+                  fontWeight: 850
+                }}
+              >
+                Laboratory results
+              </Typography>
+
+              <Typography
+                sx={{
+                  fontSize: 11.8,
+                  color: muted,
+                  mt: 0.4,
+                  lineHeight: 1.6
+                }}
+              >
+                Edit individual rows and save them to SQLite.
+                Flags must reflect explicit report markings.
               </Typography>
             </Box>
+
+            <Chip
+              className="ba-metric-chip"
+              label="ROW EDITOR"
+              sx={{
+                alignSelf: "flex-start"
+              }}
+            />
           </Stack>
 
           <Box
+            className="ba-table-shell"
+            aria-busy={loading}
             sx={{
-              borderRadius: 2,
-              border: "1px solid rgba(148,163,184,0.14)",
-              bgcolor: "rgba(255,255,255,0.03)",
-              p: 1.4
+              minWidth: 0,
+              width: "100%",
+              maxWidth: "100%",
+              overflow: "hidden",
+              borderRadius: 3,
+              border: `1px solid ${line}`,
+              p: {
+                xs: 0.7,
+                sm: 1.25
+              },
+              bgcolor: "rgba(7,12,28,.44)",
+              pointerEvents: loading
+                ? "none"
+                : "auto",
+              opacity: loading ? 0.65 : 1
             }}
           >
             <JsonTableEditor
@@ -658,30 +1475,74 @@ export default function DocumentCard({ doc, apiBase, onDeleted, onToast }) {
               docId={docId}
               rows={tableRows}
               setRows={setTableRows}
-              onSaved={async () => {
-                const rows = await loadSavedRows();
-                setTableRows((prev) => mergeSavedRows(prev, rows));
-                toast("Row saved.", "success");
-              }}
+              onSaved={onRowSaved}
               onToast={onToast}
             />
           </Box>
         </Box>
       </Box>
 
-      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
-        <DialogTitle sx={{ fontWeight: 950 }}>Delete document?</DialogTitle>
+      <Dialog
+        open={confirmOpen}
+        onClose={() =>
+          !loading && setConfirmOpen(false)
+        }
+        PaperProps={{
+          sx: {
+            ...surface,
+            borderRadius: 3.3,
+            width: "min(440px,92vw)"
+          }
+        }}
+      >
+        <DialogTitle
+          sx={{
+            fontWeight: 850,
+            letterSpacing: "-.02em"
+          }}
+        >
+          Delete document?
+        </DialogTitle>
+
         <DialogContent>
-          <Typography sx={{ color: "rgba(229,231,235,0.8)" }}>
-            This will delete the document and all stored artifacts (MinIO + DB rows).
+          <Typography
+            sx={{
+              color: muted,
+              lineHeight: 1.7,
+              fontSize: 13.4
+            }}
+          >
+            This permanently removes the document,
+            its stored artifacts, and saved database rows.
+            This action cannot be undone.
           </Typography>
         </DialogContent>
-        <DialogActions sx={{ p: 2 }}>
-          <Button onClick={() => setConfirmOpen(false)} sx={{ borderRadius: 3, fontWeight: 950 }}>
+
+        <DialogActions
+          sx={{
+            p: 2.2,
+            gap: 0.7
+          }}
+        >
+          <Button
+            onClick={() => setConfirmOpen(false)}
+            disabled={loading}
+          >
             Cancel
           </Button>
-          <Button onClick={deleteDoc} variant="contained" color="error" sx={{ borderRadius: 3, fontWeight: 950 }}>
-            Delete
+
+          <Button
+            variant="contained"
+            color="error"
+            startIcon={<DeleteOutlineIcon />}
+            disabled={busy}
+            onClick={deleteDoc}
+            sx={{
+              borderRadius: 2.2,
+              fontWeight: 800
+            }}
+          >
+            Delete document
           </Button>
         </DialogActions>
       </Dialog>
